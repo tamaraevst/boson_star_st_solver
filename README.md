@@ -1,4 +1,4 @@
-# Boson Star Solution in Scalar-Tensor Theory
+# Boson stars in scalar-tensor theory
 
 1D solver to compute solutions to boson stars in scalar-tensor theory with Damour and Esposito-Farese coupling choice.
 
