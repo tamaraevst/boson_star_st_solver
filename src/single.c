@@ -280,7 +280,7 @@ void shoot()
     par.omega0 = ommax;
   else
     { printf("Invalid value minmax = %s\n\n", par.minmax); exit(0); }
-  printf("r-stop is:", &rstop);
+  printf("r-stop is:", rstop);
   }
 
 /*==========================================================================*/
