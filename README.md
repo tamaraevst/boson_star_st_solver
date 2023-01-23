@@ -4,4 +4,4 @@
 
 Where to find things...
  * ``` src ``` - source code with example parameter file.
- * ``` notes ```- brief notes on equations and implementation side of the solver.
+ * ``` docs ```- brief notes on equations and implementation side of the solver.
