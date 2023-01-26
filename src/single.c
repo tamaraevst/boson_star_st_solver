@@ -64,7 +64,7 @@ void    readPars        (char*);
 void    registerPotential();
 void    rescalePhi      ();
 void    rhsBSint        (double*, double*, double*, double*, double*, double*, double, double, double, double, double, double, double, double);
-void    rhsIso          (double*, double, double, double);
+void    rhsIso          (double*, double, double, double, double);
 int     iofr            (double);
 void    shoot           ();
 double  V_series        (double);
@@ -1156,7 +1156,7 @@ int calcRadius_index()
 void calcIso()
   {
   int i, n1;
-  double dr, r, R, X, f, rhs_f, df[5];
+  double dr, r, R, phigrav, X, f, rhs_f, df[5];
   double m, Rfac;
 
 
@@ -1177,28 +1177,28 @@ void calcIso()
     X = star.X[i-1];
     f = star.f[i-1];
 
-    rhsIso(&rhs_f, r, X, f);
+    rhsIso(&rhs_f, r, phigrav, X, f);
     df[1] = rhs_f * dr;
 
     // 2nd RK step
     r = 0.5 * (star.r[i-1] + star.r[i]);
     X = 0.5 * (star.X[i-1] + star.X[i]);
     f = star.f[i-1] + 0.5 * df[1];
-    rhsIso(&rhs_f, r, X, f);
+    rhsIso(&rhs_f, r, phigrav, X, f);
     df[2] = rhs_f * dr;
 
     // 3rd RK step
     r = 0.5 * (star.r[i-1] + star.r[i]);
     X = 0.5 * (star.X[i-1] + star.X[i]);
     f = star.f[i-1] + 0.5 * df[2];
-    rhsIso(&rhs_f, r, X, f);
+    rhsIso(&rhs_f, r, phigrav, X, f);
     df[3] = rhs_f * dr;
 
     // 4th RK step
     r = star.r[i];
     X = star.X[i];
     f = star.f[i-1] + df[3];
-    rhsIso(&rhs_f, r, X, f);
+    rhsIso(&rhs_f, r, phigrav, X, f);
     df[4] = rhs_f * dr;
 
     // Update variable and compute new variables
@@ -1242,7 +1242,7 @@ void calcIso()
 
 /*==========================================================================*/
 
-void rhsIso(double* rhs_f, double r, double X, double f)
+void rhsIso(double* rhs_f, double r, double phigrav, double X, double f)
   {
   if(r < 1.0e-15)
     {
@@ -1253,7 +1253,7 @@ void rhsIso(double* rhs_f, double r, double X, double f)
     }
   else
     {
-    *rhs_f = f * (X - 1) / r;
+    *rhs_f = f * (X*sqrt(F(phigrav)) - 1) / r;
     }
   }
 
