@@ -154,6 +154,36 @@ Using the boundary condition at the origin \eqref{eq:bcsattheorigin}, we are abl
 \end{align}
 
 %=============================================================================
+\section{Conversion to isotropic radius}
+If one prefers to work with isotropic radius, here we present how their radial quantities are related. This is also coded up in the $1D$-solver. I'd expect the isotropic line-element ansatz for the scalar-tensor theory would take the following form
+\begin{equation} \label{eq:iso_line}
+    {\rm d}s^2 = -F \alpha^2 {\rm d}t^2 + F \psi^4 \left({\rm d}R^2 +R^2 {\rm d}\Omega^2 \right).
+\end{equation}
+Comparing it with the areal-radius line-element, which is assumed to be
+\begin{equation} \label{eq:areal_line}
+    {\rm d}s^2 = -F \alpha^2 {\rm d}t^2 + F X^2 {\rm d}r^2 +r^2 {\rm d}\Omega^2,
+\end{equation}
+we find the following relations between the variables
+\begin{equation}
+    F \psi^4 R^2 = r^2 \quad \text{ and } \quad  \psi^4 {\rm d}R^2 = X^2 {\rm d}r^2.
+\end{equation}
+The latter equation has a singular nature, making our lives harder, so in order not to deal with singularities, we introduce a new variable
+\begin{equation} \label{eq:f-func}
+    f(r) \defeq \frac{R}{r} \quad \implies \quad \frac{{\rm d}f}{{\rm d}r} = \frac{f}{r}\left(X\sqrt{F}-1\right).
+\end{equation}
+At the origin, we know that $X(r = 0) = 1/\sqrt{F(\varphi(0))} + \mathcal{O}(r^2)$ and so in the derivative equation for $f(r)$, \eqref{eq:f-func}, the bracket becomes zero and the radii relate linearly, in other words $R \propto r$. In the code, we therefore set $f=1$ initially and integrate it out; after that we re-scale it appropriately by requiring that both radii agree at infinity. We can do this, since any kind of multiplication of the solution by a constant still gives us the solution to the ODE.
+
+Now, to find this appropriate re-scaling to the $f(r)$ solution, we equate the areas resulted from the line-elements \eqref{eq:iso_line}--\eqref{eq:areal_line} and for large radii approximate the conformal factor of the isotropic line-element via $\psi = 1 - m/(2R)$. By doing so the equality simplifies to the following
+\begin{equation}
+    r^2 = F \left(1- \frac{m}{2R} \right)^4 R^2.
+\end{equation}
+After some algebraic manipulations, we then obtain the following radial relations
+\begin{equation}
+    R = \left(\frac{r}{\sqrt{F}} -m \right) - \frac{1}{4}\frac{\sqrt{F}m^2}{\left(r - \sqrt{F}m \right)} \quad \Leftrightarrow \quad r = \sqrt{F} \left(m + R + \frac{1}{4}\frac{m^2}{R} \right),
+\end{equation}
+which reduce to the GR case in the limit, $F \to 1$ (see Uli's notes on BSs).
+
+%=============================================================================
 \section{Asymptotic behaviour}
 Whilst the asymptotics turned quite out tricky and we have identified 3 cases that should be analysed separately for when $\alpha_0 \neq 0$ (with 2 of them being 'physical'). We focus on the case when $h < 2k$, which forces most of the 'nasty' terms to cancel in the asymptotic behaviour of the equations. This means the asymptotic behaviours of the bosonic scalar field and the gravitational scalar field are summarized as follows
 \begin{align}
