@@ -35,6 +35,8 @@ typedef struct param
   double        beta0;
   double        phigrav0;
   int           nzerotarget;
+  double        conv_thresh; // new parameter that we introduce to set up the convergence threshold for the numerical value, 
+                             // once this criteria is satisfied, we deem the solution as 'converged'.
   double        thresh;
   double        mpercentage;
   double        rmatchfac;
@@ -101,16 +103,15 @@ int main(int argc, char* argv[])
   int converged;
   double omBS, mBS, rBS, CBS;
 
+  double initial_omega;
+
   if(argc != 2) { printf("Usage:   %s   <parfile>\n\n", argv[0]); exit(0); }
 
-  // printf("I'm reading params file \n");
   // Parameters
   readPars(argv[1]);
   printPars();
 
-  /*printf("V_series = %g\n", V_series(0.1));
-  printf("V_solitonic = %g\n", V_solitonic(0.1));
-  exit(0);*/
+  initial_omega = par.omega0;
 
   // Register functions
   registerPotential();
@@ -129,37 +130,48 @@ int main(int argc, char* argv[])
   star.psi = (double*) malloc((size_t) par.nint * sizeof(double));
   star.C   = (double*) malloc((size_t) par.nint * sizeof(double));  
 
-  for (k = 0; k < 1000; ++k)
+  for (k = 0; k < 51; ++k)
   { 
     printf("I am starting iteration number: %d\n", k);
     printf("Gravitational scalar field guess is set to %22.16g\n", par.phigrav0);
-  
-    // Shoot
+
+    par.omega0 = initial_omega;
+
+    // Shoot 
     shoot();
+
     // Calculate exterior
-    converged = calcExtAsym();
-      
+    converged = calcExtAsym(); //now function calcExtAsym() spits out either 0 if did not coneverge,
+                               // or the matching radius for the gravitational scalar field if it did converge at the end.
+    
     // Rescale the time-time component of the metric such that it
     // corresponds to a Schwarzschild exterior.
     rescalePhi();
 
-    //This is where we define the surface of the boson star to be -- this should be far enough!
-    int jj = par.nint - 100;
+    // Compute diagnostic quantities and transform to isotropic coordinates.
+    calcMass();
 
-    // Surface criterion of https://iopscience.iop.org/article/10.1088/0264-9381/33/13/135002/pdf Eq.(3.15).
-    double derivative_term = (star.Phi[jj] - star.Phi[jj-1])/(star.r[jj] - star.r[jj-1]);
-    double sqrt_expr = sqrt(derivative_term * derivative_term + star.X[jj] * star.X[jj] * star.eta[jj] * star.eta[jj]);
-    double varphi_surface = 0.0 - (star.X[jj] * star.eta[jj]) / sqrt_expr * atanh( sqrt_expr / (derivative_term + 1 / star.r[jj]));
+    //This is where we check whether our criterion is satisfied.
+    int jj = converged - 5;
+
+    double end_mass  = star.m[jj];
+
+    // Criterion for the gravitational field at the radius of matching; criterion is given by requiring 'the derivative is smooth',
+    // equivalently the matching is smooth.
+
+    double delta = end_mass * par.mphigrav0;
+    double factor = pow(star.r[jj], 2+delta) * exp(par.mphigrav0 * star.r[jj]);
+    double denominator = - 1 - delta - star.r[jj] * par.mphigrav0;
+    double derivative_term = (star.phigrav[jj] - star.phigrav[jj-1])/(star.r[jj] - star.r[jj-1]);
+    double constantA = factor * derivative_term / denominator;
+    double varphi_surface = constantA * pow(star.r[jj], - 1 - delta) * exp(-par.mphigrav0 * star.r[jj]);
     double criterion = star.phigrav[jj] - varphi_surface;
     
     printf("Surface boundary condition:   %g\n", varphi_surface);
     printf("Gravitational scalar field at the surface boundary condition:   %g\n", star.phigrav[jj]);
 
-    if (fabs(criterion) < 1e-05)
+    if (fabs(criterion) < par.conv_thresh && converged != 0)
       {
-        // Compute diagnostic quantities and transform to isotropic coordinates.
-        calcMass();
-
         rBS  = calcRadius();
         mBS  = star.m[par.nint-1];
         omBS = par.omega0;
@@ -169,6 +181,19 @@ int main(int argc, char* argv[])
 
         printf("I get the following difference, %22.16g\n", fabs(criterion));
         break;
+      } 
+      // If no converegnce has been found, i.e. Nans in some values, then change \varphi_c to something else.
+      else if (converged == 0)
+      {
+        printf("Updating initial value for the gravitational field \n");
+        par.phigrav0 -= 0.001;
+      }
+      // Potentially dangerous territory, if it does not converge at all, but fingers crossed it is fine.
+      // I am a little impatient when it comes to iterations, so we set 50 as the ceiling here.
+      else if (k==50) 
+      {
+        printf("I did not converge \n");
+        exit(0);
       }
       // If surface criterion not satisfied to the above tolerance, use Newton-Raphson to improve the guess for \varphi_c.
       else {
@@ -179,10 +204,17 @@ int main(int argc, char* argv[])
         shoot();
         converged = calcExtAsym();
         rescalePhi();
+        calcMass();
 
-        double sqrt_expr_v2 = sqrt(derivative_term * derivative_term + star.X[jj] * star.X[jj] * star.eta[jj] * star.eta[jj]);
-        double varphi_surface_v2 = 0.0 - (star.X[jj] * star.eta[jj]) / sqrt_expr_v2
-                           * atanh( sqrt_expr_v2 / (derivative_term + 1 / star.r[jj]));
+        double end_mass_v2  = star.m[jj];
+
+        // Surface criterion of https://iopscience.iop.org/article/10.1088/0264-9381/33/13/135002/pdf Eq.(3.15).
+        double delta_v2 = end_mass * par.mphigrav0;
+        double factor_v2 = pow(star.r[jj], 2+delta) * exp(par.mphigrav0 * star.r[jj]);
+        double denominator_v2 = - 1 - delta_v2 - star.r[jj] * par.mphigrav0;
+        double derivative_term_v2 = (star.phigrav[jj] - star.phigrav[jj-1])/(star.r[jj] - star.r[jj-1]);
+        double constantA_v2 = factor_v2 * derivative_term_v2 / denominator_v2;
+        double varphi_surface_v2 = constantA_v2 * pow(star.r[jj], - 1 - delta_v2) * exp(-par.mphigrav0 * star.r[jj]);
         double criterion_v2 = star.phigrav[jj] - varphi_surface_v2;
 
         double criterion_derivative = (criterion_v2 - criterion) / (1e-05);
@@ -190,6 +222,7 @@ int main(int argc, char* argv[])
         par.phigrav0 -= (1e-05 + criterion/criterion_derivative);
            }
   }
+
   // IO
   out1D(star.r, star.X, 0, par.nint-1, "X.dat");
   out1D(star.r, star.phigrav, 0, par.nint-1, "phigrav.dat");
@@ -200,7 +233,6 @@ int main(int argc, char* argv[])
   out1D(star.r, star.m, 0, par.nint-1, "m.dat");
   out1D(star.r, star.R, 0, par.nint-1, "RisoofR.dat");
   out1D(star.R, star.f, 0, par.nint-1, "fofriso.dat");
-  //out1D(star.R, star.psi, 0, par.nint-1, "psiofriso.dat");
   out1D(star.R, star.A, 0, par.nint-1, "Aofriso.dat");
 
   printf("\n===================================================\n");
@@ -223,11 +255,9 @@ void shoot()
   printf("omega               Zero crossings            Rstop          sigA\n");
   printf("=================================================================\n");
 
-  // printf("I'm setting up the grid \n");
   // Grid setup
   initGrid(par.nint, par.rmax);
 
-  // printf("I'm searching for min and max frequency \n");
   // (1) Find an upper and a lower limit for the frequency. This is done
   //     in findFreqMinMax, starting with omega=1 and then doubling or
   //     halving the value; see comments in that function. Should this
@@ -279,11 +309,12 @@ void shoot()
   else if(strcmp(par.minmax, "max") == 0)
     par.omega0 = ommax;
   else
-    { printf("Invalid value minmax = %s\n\n", par.minmax); exit(0); }
-     printf("r-stop is: %g\n", rstop);
-  }
+    { printf("Invalid value minmax = %s\n\n", par.minmax); exit(0); }  
+}
 
 /*==========================================================================*/
+// In this function we look for which sclar field needs matching sooner than the other, we then
+// match both fields from there.
 
 int calcExtAsym()
   {
@@ -300,22 +331,15 @@ int calcExtAsym()
   // exterior. Note that we are not yet rescaling time and frequency
   // yet, since we will need the complete profile with exterior to do
   // that.
+
   intODE(par.A0, par.phigrav0, par.omega0, &nzero, &rstop, &rstopgrav, &sigA);
   printf("------------------------------------------------------------------------------------------------------\n");
   printf("%22.16g          %d          %15.7g          %15.7g           %d\n",
          par.omega0, nzero, rstop, rstopgrav, sigA);
   printf("------------------------------------------------------------------------------------------------------\n");
 
+  //Where do we match the bosonic scalar field?
 
-  // We now have a model that either drops in scalar amplitude all
-  // the way to the edge of our grid (unlikely) or will diverge
-  // somewhere along our grid towards either positive or negative
-  // values. We regularize this divergence and replace it with a
-  // smooth exterior solution as follows:
-  // (1) Search backwards from the truncation point (rstop -- for
-  //     which we need to find the index) until we find a minimum
-  //     in abs(A). That is the point from which we construct the
-  //     exterior.
   istop = iofr(rstop);
   for(i = istop-1; i > 0; i--)
   {
@@ -333,8 +357,10 @@ int calcExtAsym()
 
   printf("Matching the bosonic field to exterior at   r[%d] = %g\n\n", imatch, star.r[imatch]);
 
+  // Where do we match the gravitational scalar field?
+
   istopgrav = iofr(rstopgrav);
-  for(k = istopgrav-1; k > 0; k--)
+  for(k = istopgrav; k > 0; k--)
   {
     if(fabs(star.phigrav[k])<fabs(star.phigrav[k+1]) && fabs(star.phigrav[k])<fabs(star.phigrav[k-1]))
       break;
@@ -343,315 +369,229 @@ int calcExtAsym()
   printf("\nphigrav[%d] = %g   phigrav[%d] = %g   phigrav[%d] = %g\n",
          k-1, star.phigrav[k-1], k, star.phigrav[k], k+1, star.phigrav[k+1]);
 
+  // So these points below sometimes occur but they are too soon for the matching, hence we judge these cases as if the gravitational
+  // scalar field did not converge!
   if(k == 1)
-    { printf("Search for matching point yielded k = 1\n\n"); exit(0); }
-
-  imatchgrav = iofr(star.r[k] * par.rmatchfac);
-
-  printf("Matching the gravitational field to exterior at   r[%d] = %g\n\n", imatchgrav, star.r[imatchgrav]);
-  
-
-  // (2) We now match the scalar amplitude to an exterior function
-  //
-  //       A   = c1 * exp(-r * sqrt(1-om^2 / alpha^2)) / r
-  //       eta = c1 * exp(-r * sqrt(1-om^2 / alpha^2)) / r
-  //
-  //     and determine c1 and c2 through matching to A[imatch] and
-  //     eta[imatch]. Note that for asymptotic behaviour of eta,
-  //     we ignore here a contribution \propto exp(-...) / r^2.
-  //     We could formally integrate eta from A, but that deviates
-  //     more strongly from the asymptotic limit \eta -> 0 at infinity.
-  mphigrav = par.mphigrav0;
-  r   = star.r[imatchgrav];
-
-  // Need to rescale \omega according to asymptotic condition of the lapse function, \alpha
-  om  = par.omega0 * sqrt(F(star.phigrav[imatchgrav])) * exp(-star.Phi[imatchgrav]);
-
-  calcMass();
-
-  mass = star.m[imatch];
-
-  epsilon = mass * (1 - 2*om*om)/sqrt(1-om*om);
-  delta = mass * mphigrav;
-
-  //Check that h<2k condition is satisfied in the asymptotics
-  double condition1 = mphigrav - 2 * sqrt(1 - om*om);
-  
-  printf("Condition for asymptotics check = %g \n", condition1);
-
-  //Find constants of matching
-  c1 = star.A[imatchgrav] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
-  c2 = star.Psi0[imatchgrav] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
-  c3 = star.phigrav[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
-  c4 = star.eta[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
-
-  printf("\nc1, c2 = %g   %g\n", c1, c2);
-  printf("c3, c4 = %g   %g\n", c3, c4);
-
-  //Integrate outwards once again
-  for(i = imatchgrav; i < par.nint; i++)
-    {
-    dr  = star.r[i] - star.r[i-1];
-
-    // 1st RK step
-    r   = star.r[i-1];
-    X   = star.X[i-1];
-    Phi = star.Phi[i-1];
-    // phigrav = star.phigrav[i-1];
-    // eta = star.eta[i-1];
-    // A   = star.A[i-1];
-    // Psi0   = star.Psi0[i-1];
-    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-    eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[1]   = rhs_X * dr;
-    dPhi[1] = rhs_Phi * dr;
-    // dphigrav[1] = rhs_phigrav * dr;
-    // deta[1] = rhs_eta * dr;
-    // dA[1] = rhs_A * dr;
-    // dPsi0[1] = rhs_Psi0 * dr;
-
-    // 2nd RK step
-    r   = star.r[i-1]   + 0.5 * dr;
-    X   = star.X[i-1]   + 0.5 * dX[1];
-    Phi = star.Phi[i-1] + 0.5 * dPhi[1];
-    // phigrav = star.phigrav[i-1] + 0.5 * dphigrav[1];
-    // eta = star.eta[i-1] + 0.5 * deta[1];
-    // A = star.A[i-1] + 0.5 * dA[1];
-    // Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[1];
-    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-    eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[2]   = rhs_X * dr;
-    dPhi[2] = rhs_Phi * dr;
-    // dphigrav[2] = rhs_phigrav * dr;
-    // deta[2] = rhs_eta * dr;
-    // dA[2] = rhs_A * dr;
-    // dPsi0[2] = rhs_Psi0 * dr;
-
-    // 3rd RK step
-    r   = star.r[i-1]   + 0.5 * dr;
-    X   = star.X[i-1]   + 0.5 * dX[2];
-    Phi = star.Phi[i-1] + 0.5 * dPhi[2];
-    // phigrav = star.phigrav[i-1] + 0.5 * dphigrav[2];
-    // eta = star.eta[i-1] + 0.5 * deta[2];
-    // A = star.A[i-1] + 0.5 * dA[2];
-    // Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[2];
-    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-    eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[3]   = rhs_X * dr;
-    dPhi[3] = rhs_Phi * dr;
-    // dphigrav[3] = rhs_phigrav * dr;
-    // deta[3] = rhs_eta * dr;
-    // dA[3] = rhs_A * dr;
-    // dPsi0[3] = rhs_Psi0 * dr;
-
-    // 4th RK step
-    r   = star.r[i];
-    X   = star.X[i-1]   + dX[3];
-    Phi = star.Phi[i-1] + dPhi[3];
-    // phigrav = star.phigrav[i-1] + dphigrav[3];
-    // eta = star.eta[i-1] + deta[3];
-    // A = star.A[i-1] + dA[3];
-    // Psi0 = star.Psi0[i-1] + dPsi0[3];
-    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-    eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[4]   = rhs_X * dr;
-    dPhi[4] = rhs_Phi * dr;
-    // dphigrav[4] = rhs_phigrav * dr;
-    // deta[4] = rhs_eta * dr;
-    // dA[4] = rhs_A * dr;
-    // dPsi0[4] = rhs_Psi0 * dr;
-
-    // Update variables
-    star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
-    star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
-    // star.phigrav[i] = star.phigrav[i-1] + (dphigrav[1]+ 2*dphigrav[2]+ 2*dphigrav[3]+dphigrav[4]) / 6.0;
-    // star.eta[i] = star.eta[i-1] + (deta[1]+ 2*deta[2]+ 2*deta[3]+deta[4]) / 6.0;
-    // star.A[i] = star.A[i-1] + (dA[1]+ 2*dphigrav[2]+ 2*dA[3]+dA[4]) / 6.0;
-    // star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
-    r   = star.r[i];
-    star.A[i]   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    star.Psi0[i] = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-    star.phigrav[i] = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-    star.eta[i] = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+    { 
+      printf("Search for matching point yielded k = 1\n\n");
+      return 0;
     }
 
-  // printf("phigrav = %g \n", star.phigrav[imatch]);
-  // printf("Phi = %g \n", star.Phi[imatch]);
-
-  // r   = star.r[imatch-1];
-
-  // // Need to rescale \omega according to asymptotic condition of the lapse function, \alpha
-  // om  = par.omega0 * sqrt(F(star.phigrav[imatch-1])) * exp(-star.Phi[imatch-1]);
-
-  // calcMass();
-
-  // mass = star.m[imatch-1];
-
-  // epsilon = mass * (1 - 2*om*om)/sqrt(1-om*om);
-  // delta = mass * mphigrav;
-
-  // //Check that h<2k condition is satisfied in the asymptotics
-  // double condition = mphigrav - 2 * sqrt(1 - om*om);
-  
-  // printf("Condition for asymptotics check = %g \n", condition);
-
-  // //Find constants of matching
-  // c1 = star.A[imatch-1] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
-  // c2 = star.Psi0[imatch-1] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
-  // c3 = star.phigrav[imatch-1] * pow(r, 1 + delta) * exp(r * mphigrav);
-  // c4 = star.eta[imatch-1] * pow(r, 1 + delta) * exp(r * mphigrav);
-
-  // printf("\nc1, c2 = %g   %g\n", c1, c2);
-  // printf("c3, c4 = %g   %g\n", c3, c4);
-
-  // // printf("phigrav[imatch-1] =  %g\n", star.phigrav[imatch-1]);
-  // // printf("phigrav[imatch] =  %g\n", star.phigrav[imatch]);
-  // // printf("phigrav[imatch+1] =  %g\n", star.phigrav[imatch+1]);
-
-  // //Integrate outwards once again
-  // for(i = imatch; i < par.nint; i++)
-  //   {
-  //   dr  = star.r[i] - star.r[i-1];
-
-  //   // 1st RK step
-  //   r   = star.r[i-1];
-  //   X   = star.X[i-1];
-  //   Phi = star.Phi[i-1];
-  //   // phigrav = star.phigrav[i-1];
-  //   // eta = star.eta[i-1];
-  //   // A   = star.A[i-1];
-  //   // Psi0   = star.Psi0[i-1];
-  //   A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-  //   eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-  //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-  //   dX[1]   = rhs_X * dr;
-  //   dPhi[1] = rhs_Phi * dr;
-  //   // dphigrav[1] = rhs_phigrav * dr;
-  //   // deta[1] = rhs_eta * dr;
-  //   // dA[1] = rhs_A * dr;
-  //   // dPsi0[1] = rhs_Psi0 * dr;
-
-  //   // 2nd RK step
-  //   r   = star.r[i-1]   + 0.5 * dr;
-  //   X   = star.X[i-1]   + 0.5 * dX[1];
-  //   Phi = star.Phi[i-1] + 0.5 * dPhi[1];
-  //   // phigrav = star.phigrav[i-1] + 0.5 * dphigrav[1];
-  //   // eta = star.eta[i-1] + 0.5 * deta[1];
-  //   // A = star.A[i-1] + 0.5 * dA[1];
-  //   // Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[1];
-  //   A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-  //   eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-  //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-  //   dX[2]   = rhs_X * dr;
-  //   dPhi[2] = rhs_Phi * dr;
-  //   // dphigrav[2] = rhs_phigrav * dr;
-  //   // deta[2] = rhs_eta * dr;
-  //   // dA[2] = rhs_A * dr;
-  //   // dPsi0[2] = rhs_Psi0 * dr;
-
-  //   // 3rd RK step
-  //   r   = star.r[i-1]   + 0.5 * dr;
-  //   X   = star.X[i-1]   + 0.5 * dX[2];
-  //   Phi = star.Phi[i-1] + 0.5 * dPhi[2];
-  //   // phigrav = star.phigrav[i-1] + 0.5 * dphigrav[2];
-  //   // eta = star.eta[i-1] + 0.5 * deta[2];
-  //   // A = star.A[i-1] + 0.5 * dA[2];
-  //   // Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[2];
-  //   A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-  //   eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-  //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-  //   dX[3]   = rhs_X * dr;
-  //   dPhi[3] = rhs_Phi * dr;
-  //   // dphigrav[3] = rhs_phigrav * dr;
-  //   // deta[3] = rhs_eta * dr;
-  //   // dA[3] = rhs_A * dr;
-  //   // dPsi0[3] = rhs_Psi0 * dr;
-
-  //   // 4th RK step
-  //   r   = star.r[i];
-  //   X   = star.X[i-1]   + dX[3];
-  //   Phi = star.Phi[i-1] + dPhi[3];
-  //   // phigrav = star.phigrav[i-1] + dphigrav[3];
-  //   // eta = star.eta[i-1] + deta[3];
-  //   // A = star.A[i-1] + dA[3];
-  //   // Psi0 = star.Psi0[i-1] + dPsi0[3];
-  //   A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-  //   eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
-  //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-  //   dX[4]   = rhs_X * dr;
-  //   dPhi[4] = rhs_Phi * dr;
-  //   // dphigrav[4] = rhs_phigrav * dr;
-  //   // deta[4] = rhs_eta * dr;
-  //   // dA[4] = rhs_A * dr;
-  //   // dPsi0[4] = rhs_Psi0 * dr;
-
-  //   // Update variables
-  //   star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
-  //   star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
-  //   // star.phigrav[i] = star.phigrav[i-1] + (dphigrav[1]+ 2*dphigrav[2]+ 2*dphigrav[3]+dphigrav[4]) / 6.0;
-  //   // star.eta[i] = star.eta[i-1] + (deta[1]+ 2*deta[2]+ 2*deta[3]+deta[4]) / 6.0;
-  //   // star.A[i] = star.A[i-1] + (dA[1]+ 2*dphigrav[2]+ 2*dA[3]+dA[4]) / 6.0;
-  //   // star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
-  //   r   = star.r[i];
-  //   star.phigrav[i] = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-  //   star.eta[i] = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta);
-  //   star.A[i]   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   star.Psi0[i] = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
-  //   }
-
-  // printf("phigrav[imatch-1] =  %g\n", star.phigrav[imatch-1]);
-  // printf("phigrav[imatch] =  %g\n", star.phigrav[imatch]);
-  // printf("phigrav[imatch+1] =  %g\n", star.phigrav[imatch+1]);
-
-  // istopgrav = iofr(rstopgrav);
-  // for(k = istopgrav-1; k > 0; k--)
-  // {
-  //   if(fabs(star.phigrav[k])<fabs(star.phigrav[k+1]) && fabs(star.phigrav[k])<fabs(star.phigrav[k-1]))
-  //     break;
-  // }
-
-  // printf("\nphigrav[%d] = %g   phigrav[%d] = %g   phigrav[%d] = %g\n",
-  //        k-1, star.phigrav[k-1], k, star.phigrav[k], k+1, star.phigrav[k+1]);
-
-  // if(k == 1)
-  //   { printf("Search for matching point yielded k = 1\n\n"); exit(0); }
-
-  // imatchgrav = iofr(star.r[k]*par.rmatchfac);
-
-  // printf("Matching the gravitational field to exterior at   r[%d] = %g\n\n", imatchgrav, star.r[imatchgrav]);
-
-
-  //Sanity check for NaNs
-  if (isnan(c1)|| isnan(c2) || isnan(c3) || isnan(c4) || isnan(star.Phi[par.nint]) || isnan(star.phigrav[par.nint-1]) || isnan(star.X[par.nint]))
-  { if (isnan(star.Phi[par.nint]))
-          {printf("Phi is nan on the grid boundary \n");}
-    if (isnan(star.phigrav[par.nint-1]))
-          {printf("Gravitational scalar field is nan on the grid boundary \n");}
-    if (isnan(star.X[par.nint]))
-          {printf("X is nan on the grid boundary \n");}
-    return 0;}
+  if(k == 0)
+    { 
+      printf("Search for matching point yielded k = 0\n\n");
+      return 0;
+    }
   else
-  { return 1;}
+    {imatchgrav = iofr(star.r[k]*par.rmatchfac);}
+
+  printf("Matching the gravitational field to exterior at   r[%d] = %g\n\n", imatchgrav, star.r[imatchgrav]);
+
+  mphigrav = par.mphigrav0;
+
+  if (imatchgrav > imatch)
+  {
+    printf("Bosonic scalar field needs to be matched sooner\n");
+
+    // Begin to match the bosonic scalar field
+    r   = star.r[imatch];
+
+    // Need to rescale \omega according to asymptotic condition of the lapse function, \alpha
+    om  = par.omega0 * sqrt(F(star.phigrav[imatch])) * exp(-star.Phi[imatch]);
+
+    calcMass();
+
+    mass = star.m[imatch];
+
+    epsilon = mass * (1 - 2*om*om)/sqrt(1-om*om);
+    delta = mass * mphigrav;
+
+    //Check that h<2k condition is satisfied in the asymptotics
+    double condition1 = mphigrav - 2 * sqrt(1 - om*om);
+    
+    printf("Condition for asymptotics check = %g \n", condition1);
+
+    //Find constants of matching
+    c1 = star.A[imatch] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
+    c2 = star.Psi0[imatch] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
+    c3 = star.phigrav[imatch] * pow(r, 1 + delta) * exp(r * mphigrav);
+    c4 = star.eta[imatch] * pow(r, 1 + delta) * exp(r * mphigrav);
+
+    printf("\nc1, c2 = %g   %g\n", c1, c2);
+    printf("\nc3, c4 = %g   %g\n", c3, c4);
+
+    //Integrate outwards once again
+    for(i = imatch+1; i < par.nint; i++)
+      {
+      dr  = star.r[i] - star.r[i-1];
+
+      // 1st RK step
+      r   = star.r[i-1];
+      X   = star.X[i-1];
+      Phi = star.Phi[i-1];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[1]   = rhs_X * dr;
+      dPhi[1] = rhs_Phi * dr;
+
+      // 2nd RK step
+      r   = star.r[i-1]   + 0.5 * dr;
+      X   = star.X[i-1]   + 0.5 * dX[1];
+      Phi = star.Phi[i-1] + 0.5 * dPhi[1];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[2]   = rhs_X * dr;
+      dPhi[2] = rhs_Phi * dr;
+
+      // 3rd RK step
+      r   = star.r[i-1]   + 0.5 * dr;
+      X   = star.X[i-1]   + 0.5 * dX[2];
+      Phi = star.Phi[i-1] + 0.5 * dPhi[2];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[3]   = rhs_X * dr;
+      dPhi[3] = rhs_Phi * dr;
+
+      // 4th RK step
+      r   = star.r[i];
+      X   = star.X[i-1]   + dX[3];
+      Phi = star.Phi[i-1] + dPhi[3];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[4]   = rhs_X * dr;
+      dPhi[4] = rhs_Phi * dr;
+
+      // Update variables
+      star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
+      star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
+      r   = star.r[i];
+      star.A[i] = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      star.Psi0[i] = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      star.phigrav[i] = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      star.eta[i] = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      }
+  }
+
+  if (imatch > imatchgrav)
+  {
+    printf("Gravitational scalar field needs to be matched sooner\n");
+     // Now, match the gravitational scalar field by pretty much doing the same thing!
+    r   = star.r[imatchgrav];
+
+    // Need to rescale \omega according to asymptotic condition of the lapse function, \alpha
+    om  = par.omega0 * sqrt(F(star.phigrav[imatchgrav])) * exp(-star.Phi[imatchgrav]);
+    printf("om = %g \n", om);
+
+    calcMass();
+
+    mass = star.m[imatchgrav];
+
+    epsilon = mass * (1 - 2*om*om)/sqrt(1-om*om);
+    printf("epsilonvalue = %g \n", epsilon);
+
+    delta = mass * mphigrav;
+
+    //Check that h<2k condition is satisfied in the asymptotics
+    double condition1 = mphigrav - 2 * sqrt(1 - om*om);
+    
+    printf("Condition for asymptotics check = %g \n", condition1);
+
+    //Find constants of matching
+    c1 = star.A[imatchgrav] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
+    c2 = star.Psi0[imatchgrav] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
+    c3 = star.phigrav[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
+    c4 = star.eta[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
+
+    printf("c1, c2 = %g   %g\n", c1, c2);
+    printf("c3, c4 = %g   %g\n", c3, c4);
+
+    //Integrate outwards once again
+    for(i = imatchgrav+1; i < par.nint; i++)
+      {
+      dr  = star.r[i] - star.r[i-1];
+
+      // 1st RK step
+      r   = star.r[i-1];
+      X   = star.X[i-1];
+      Phi = star.Phi[i-1];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[1]   = rhs_X * dr;
+      dPhi[1] = rhs_Phi * dr;
+
+      // 2nd RK step
+      r   = star.r[i-1]   + 0.5 * dr;
+      X   = star.X[i-1]   + 0.5 * dX[1];
+      Phi = star.Phi[i-1] + 0.5 * dPhi[1];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[2]   = rhs_X * dr;
+      dPhi[2] = rhs_Phi * dr;
+  
+      // 3rd RK step
+      r   = star.r[i-1]   + 0.5 * dr;
+      X   = star.X[i-1]   + 0.5 * dX[2];
+      Phi = star.Phi[i-1] + 0.5 * dPhi[2];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[3]   = rhs_X * dr;
+      dPhi[3] = rhs_Phi * dr;
+
+      // 4th RK step
+      r   = star.r[i];
+      X   = star.X[i-1]   + dX[3];
+      Phi = star.Phi[i-1] + dPhi[3];
+      A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
+      rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+      dX[4]   = rhs_X * dr;
+      dPhi[4] = rhs_Phi * dr;
+    
+      // Update variables
+      star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
+      star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
+      r   = star.r[i];
+      star.A[i]   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      star.Psi0[i] = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      star.phigrav[i] = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      star.eta[i] = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta);
+      }
+    }
+
+    //Sanity check for NaNs
+    if (isnan(c1)|| isnan(c2) || isnan(c3) || isnan(c4) || isnan(star.Phi[par.nint]) || isnan(star.phigrav[par.nint-1]) || isnan(star.X[par.nint-1]))
+    { if (isnan(star.Phi[par.nint]))
+            {printf("Phi is nan on the grid boundary \n");}
+      if (isnan(star.phigrav[par.nint-1]))
+            {printf("Gravitational scalar field is nan on the grid boundary \n");}
+      if (isnan(star.X[par.nint-1]))
+            {printf("X is nan on the grid boundary \n");}
+      return 0;}
+    else
+    { return imatchgrav;}
   
   // Overwrite eta with the derivative of A?
   // This is introduces kinks in the eta profile and we do not use it.
@@ -771,7 +711,6 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
   star.eta[0] = 0;
   star.Phi[0] = 0;   // Phi has a free constant we later match to Schwarzschild
 
-  // printf("I'm doing RK integration for the first time here \n");
   // RK integration
   for(i = 1; i < n1; i++)
     {
@@ -864,10 +803,10 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
 
     if(star.A[i] * star.A[i-1] < 0) (*nzero)++;   // Zero crossing found
 
-    if(fabs(star.phigrav[i]) > star.phigrav[0] || star.phigrav[i] != star.phigrav[i])
+    //Do the same inspection for \phigrav!
+    if(fabs(star.phigrav[i]) > 2*star.phigrav[5000] || star.phigrav[i] != star.phigrav[i])
       {
         phigravstop = i - 1;   // We stop the integration; one point as sanity buffer
-        // printf("phigravstop: %22.16g \n", star.r[phigravstop]);
       }
     }
 
@@ -878,15 +817,89 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     return;   // Integration went through; no need for vacuum
     }
 
-  // Set to vacuum beyond rstop
+  // Set to vacuum beyond rstop and rstopgrav
   *rstop = star.r[istop];
   *rstopgrav = star.r[phigravstop];
 
   // printf("boson stop: %22.16g \n", star.r[istop]);
   // printf("noboson stop: %22.16g \n", star.r[phigravstop]);
 
-  // RK integration
-  for(i = phigravstop; i < n1; i++)
+  // Usually the gravitational scalar forld goes bonkers a little sooner than the bosonic scalar field
+  // so we set to zero the gravitational scalar field to zero first and keep on integrating out the
+  // bosonic scalar field to istop limit.
+
+  for(i = phigravstop; i < istop; i++)
+    {
+    dr  = star.r[i] - star.r[i-1];
+
+    // 1st RK step
+    r   = star.r[i-1];
+    X   = star.X[i-1];
+    A   = star.A[i-1];
+    Psi0   = star.Psi0[i-1];
+    phigrav = 0;
+    eta = 0;
+    Phi = star.Phi[i-1];
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[1]   = rhs_A * dr;
+    dPsi0[1] = rhs_Psi0 * dr;
+    dA[1]   = rhs_X * dr;
+    dPhi[1] = rhs_Phi * dr;
+
+    // 2nd RK step
+    r   = star.r[i-1] + 0.5 * dr;
+    X   = star.X[i-1] + 0.5 * dX[1];
+    A   = star.A[i-1] + 0.5 * dA[1];
+    Psi0   = star.Psi0[i-1] + 0.5 * dPsi0[1];
+    phigrav = 0;
+    eta = 0;
+    Phi = star.Phi[i-1] + 0.5 * dPhi[1];
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[2]   = rhs_X * dr;
+    dPhi[2] = rhs_Phi * dr;
+    dA[2]   = rhs_A * dr;
+    dPsi0[2] = rhs_Psi0 * dr;
+
+    // 3rd RK step
+    r   = star.r[i-1] + 0.5 * dr;
+    X   = star.X[i-1] + 0.5 * dX[2];
+    A   = star.A[i-1] + 0.5 * dA[2];
+    Psi0   = star.Psi0[i-1] + 0.5 * dPsi0[2];
+    phigrav   = 0;
+    eta = 0;
+    Phi = star.Phi[i-1] + 0.5 * dPhi[2];
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[3]   = rhs_X * dr;
+    dPhi[3] = rhs_Phi * dr;
+    dA[3]   = rhs_A * dr;
+    dPsi0[3] = rhs_Psi0 * dr;
+
+    // 4th RK step
+    r   = star.r[i];
+    X   = star.X[i-1] + dX[3];
+    A   = star.A[i] + dA[3];
+    Psi0   = star.Psi0[i-1] + dPsi0[3];
+    phigrav = 0;
+    eta = 0;
+    Phi = star.Phi[i-1] + dPhi[3];
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[4]   = rhs_X * dr;
+    dPhi[4] = rhs_Phi * dr;
+    dA[4]   = rhs_A * dr;
+    dPsi0[4] = rhs_Psi0 * dr;
+
+    // Update variables
+    star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
+    star.A[i]   = star.A[i-1]   + (dA[1]  + 2*dA[2]  + 2*dA[3]  + dA[4] ) / 6.0;
+    star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
+    star.phigrav[i] = 0;
+    star.eta[i]   = 0;
+    star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
+    }
+
+    // Now it's time to set the bosonic scalar field to zero
+
+    for(i = istop; i < n1; i++)
     {
     dr  = star.r[i] - star.r[i-1];
 
@@ -897,14 +910,10 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     Psi0 = 0;
     phigrav = 0;
     eta = 0;
-    // phigrav = star.phigrav[i-1];
-    // eta = star.eta[i-1];
     Phi = star.Phi[i-1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[1]   = rhs_X * dr;
+    dX[1]   = rhs_A * dr;
     dPhi[1] = rhs_Phi * dr;
-    // dphigrav[1] = rhs_phigrav * dr;
-    // deta[1] = rhs_eta * dr;
 
     // 2nd RK step
     r   = star.r[i-1] + 0.5 * dr;
@@ -913,14 +922,10 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     Psi0 = 0;
     phigrav = 0;
     eta = 0;
-    // phigrav = star.phigrav[i-1] + 0.5 * dphigrav[1];
-    // eta = star.eta[i-1] + 0.5 * deta[1];
     Phi = star.Phi[i-1] + 0.5 * dPhi[1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[2]   = rhs_X * dr;
     dPhi[2] = rhs_Phi * dr;
-    // dphigrav[2] = rhs_phigrav * dr;
-    // deta[2] = rhs_eta * dr;
 
     // 3rd RK step
     r   = star.r[i-1] + 0.5 * dr;
@@ -929,14 +934,10 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     Psi0 = 0;
     phigrav   = 0;
     eta = 0;
-    // phigrav   = star.phigrav[i-1] + 0.5 * dphigrav[2];
-    // eta = star.eta[i-1] + 0.5 * deta[2];
     Phi = star.Phi[i-1] + 0.5 * dPhi[2];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[3]   = rhs_X * dr;
     dPhi[3] = rhs_Phi * dr;
-    // dphigrav[3] = rhs_phigrav * dr;
-    // deta[3] = rhs_eta * dr;
 
     // 4th RK step
     r   = star.r[i];
@@ -945,14 +946,10 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     Psi0 = 0;
     phigrav = 0;
     eta = 0;
-    // phigrav = star.phigrav[i-1] + dphigrav[3];
-    // eta = star.eta[i-1] + deta[3];
     Phi = star.Phi[i-1] + dPhi[3];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[4]   = rhs_X * dr;
     dPhi[4] = rhs_Phi * dr;
-    // dphigrav[4] = rhs_phigrav * dr;
-    // deta[4] = rhs_eta * dr;
 
     // Update variables
     star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
@@ -960,105 +957,8 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     star.Psi0[i] = 0;
     star.phigrav[i] = 0;
     star.eta[i]   = 0;
-    // star.phigrav[i] = star.phigrav[i-1]   + (dphigrav[1]  + 2*dphigrav[2]  + 2*dphigrav[3]  + dphigrav[4] ) / 6.0;
-    // star.eta[i]   = star.eta[i-1]   + (deta[1]  + 2*deta[2]  + 2*deta[3]  + deta[4] ) / 6.0;
     star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
-
-     // Analyze: do we cross zero? do we exceed 2*A0?
-    // if(fabs(star.phigrav[i]) > 2*star.phigrav[0] || star.phigrav[i] != star.phigrav[i])
-    //   {
-    //     phigravstop = i - 1;   // We stop the integration; one point as sanity buffer
-    //     printf("phigravstop: %22.16g \n", star.r[phigravstop]);
-    //   }
     }
-    
-   // Set to vacuum beyond rstop
-    // *rstopgrav = star.r[phigravstop];
-
-    // RK integration
-    // for(i = phigravstop; i < n1; i++)
-    //   {
-    //   dr  = star.r[i] - star.r[i-1];
-
-    //   // 1st RK step
-    //   r   = star.r[i-1];
-    //   X   = star.X[i-1];
-    //   A   = 0;
-    //   Psi0 = 0;
-    //   phigrav = 0;
-    //   eta = 0;
-    //   // phigrav = star.phigrav[i-1];
-    //   // eta = star.eta[i-1];
-    //   Phi = star.Phi[i-1];
-    //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    //   dX[1]   = rhs_X * dr;
-    //   dPhi[1] = rhs_Phi * dr;
-    //   // dphigrav[1] = rhs_phigrav * dr;
-    //   // deta[1] = rhs_eta * dr;
-
-    //   // 2nd RK step
-    //   r   = star.r[i-1] + 0.5 * dr;
-    //   X   = star.X[i-1] + 0.5 * dX[1];
-    //   A   = 0;
-    //   Psi0 = 0;
-    //   phigrav = 0;
-    //   eta = 0;
-    //   // phigrav = star.phigrav[i-1] + 0.5 * dphigrav[1];
-    //   // eta = star.eta[i-1] + 0.5 * deta[1];
-    //   Phi = star.Phi[i-1] + 0.5 * dPhi[1];
-    //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    //   dX[2]   = rhs_X * dr;
-    //   dPhi[2] = rhs_Phi * dr;
-    //   // dphigrav[2] = rhs_phigrav * dr;
-    //   // deta[2] = rhs_eta * dr;
-
-    //   // 3rd RK step
-    //   r   = star.r[i-1] + 0.5 * dr;
-    //   X   = star.X[i-1] + 0.5 * dX[2];
-    //   A   = 0;
-    //   Psi0 = 0;
-    //   phigrav   = 0;
-    //   eta = 0;
-    //   // phigrav   = star.phigrav[i-1] + 0.5 * dphigrav[2];
-    //   // eta = star.eta[i-1] + 0.5 * deta[2];
-    //   Phi = star.Phi[i-1] + 0.5 * dPhi[2];
-    //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    //   dX[3]   = rhs_X * dr;
-    //   dPhi[3] = rhs_Phi * dr;
-    //   // dphigrav[3] = rhs_phigrav * dr;
-    //   // deta[3] = rhs_eta * dr;
-
-    //   // 4th RK step
-    //   r   = star.r[i];
-    //   X   = star.X[i-1] + dX[3];
-    //   A   = 0;
-    //   Psi0 = 0;
-    //   phigrav = 0;
-    //   eta = 0;
-    //   // phigrav = star.phigrav[i-1] + dphigrav[3];
-    //   // eta = star.eta[i-1] + deta[3];
-    //   Phi = star.Phi[i-1] + dPhi[3];
-    //   rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    //   dX[4]   = rhs_X * dr;
-    //   dPhi[4] = rhs_Phi * dr;
-    //   // dphigrav[4] = rhs_phigrav * dr;
-    //   // deta[4] = rhs_eta * dr;
-
-    //   // Update variables
-    //   star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
-    //   star.A[i]   = 0;
-    //   star.Psi0[i] = 0;
-    //   star.phigrav[i] = 0;
-    //   star.eta[i]   = 0;
-    //   // star.phigrav[i] = star.phigrav[i-1]   + (dphigrav[1]  + 2*dphigrav[2]  + 2*dphigrav[3]  + dphigrav[4] ) / 6.0;
-    //   // star.eta[i]   = star.eta[i-1]   + (deta[1]  + 2*deta[2]  + 2*deta[3]  + deta[4] ) / 6.0;
-    //   star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0; 
-    //   }
-    // for(i = 0; i < n1; i++)
-    // {printf("phigrav: %22.16g \n", star.phigrav[i]);}
-    // printf("Phi: %22.16g \n", star.Phi[par.nint-1]);
-
-    // printf("phigrav: %22.16g \n", star.phigrav[par.nint-1]);
   }
 
 /*==========================================================================*/
@@ -1202,6 +1102,7 @@ void readPars(char* ifil)
   par.phigrav0  = 0.0;
   par.omega0    = 1.;            // omega0 is always 1, it is not specified
   par.nzerotarget = 0;
+  par.conv_thresh = 1e-5;
   par.thresh    = 2e-16;
   par.mpercentage = 90;
   par.rmatchfac = 1;
@@ -1235,6 +1136,8 @@ void readPars(char* ifil)
         sscanf(line, "rmax %le", &(par.rmax));
       else if(strstr(line, "A0") != NULL)
         sscanf(line, "A0 %le", &(par.A0));
+      else if(strstr(line, "omega0") != NULL)
+        sscanf(line, "omega0 %le", &(par.omega0));
       else if(strstr(line, "mphigrav0") != NULL)
         sscanf(line, "mphigrav0 %le", &(par.mphigrav0));
       else if(strstr(line, "alpha0") != NULL)
@@ -1245,6 +1148,8 @@ void readPars(char* ifil)
         sscanf(line, "phigrav0 %le", &(par.phigrav0));
       else if(strstr(line, "nzerotarget") != NULL)
         sscanf(line, "nzerotarget %d", &(par.nzerotarget));
+      else if(strstr(line, "conv_thresh") != NULL)
+        sscanf(line, "conv_thresh %le", &(par.conv_thresh));
       else if(strstr(line, "thresh") != NULL)
         sscanf(line, "thresh %le", &(par.thresh));
       else if(strstr(line, "mpercentage") != NULL)
@@ -1277,11 +1182,13 @@ void printPars()
   printf("nint          = %d\n", par.nint);
   printf("rmax          = %g\n", par.rmax);
   printf("A0            = %g\n", par.A0);
+  printf("omega0        = %g\n", par.omega0);
   printf("mphigrav0     = %g\n", par.mphigrav0);
   printf("phigrav0      = %g\n", par.phigrav0);
   printf("alpha0        = %g\n", par.alpha0);
   printf("beta0         = %g\n", par.beta0);
   printf("nzerotarget   = %d\n", par.nzerotarget);
+  printf("conv_thresh   = %g\n", par.conv_thresh);
   printf("thresh        = %g\n", par.thresh);
   printf("mpercentage   = %g\n", par.mpercentage);
   printf("rmatchfac     = %g\n", par.rmatchfac);

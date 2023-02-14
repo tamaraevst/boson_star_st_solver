@@ -280,7 +280,6 @@ void shoot()
     par.omega0 = ommax;
   else
     { printf("Invalid value minmax = %s\n\n", par.minmax); exit(0); }
-     printf("r-stop is: %g\n", rstop);
   }
 
 /*==========================================================================*/
@@ -306,6 +305,8 @@ int calcExtAsym()
          par.omega0, nzero, rstop, sigA);
   printf("-----------------------------------------------------------------------\n");
 
+  if (rstop == par.rmax)
+  {return 1;}
 
   // We now have a model that either drops in scalar amplitude all
   // the way to the edge of our grid (unlikely) or will diverge
