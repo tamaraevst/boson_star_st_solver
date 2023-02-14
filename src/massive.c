@@ -152,7 +152,7 @@ int main(int argc, char* argv[])
     calcMass();
 
     //This is where we check whether our criterion is satisfied.
-    int jj = converged - 5;
+    int jj = converged;
 
     double end_mass  = star.m[jj];
 
