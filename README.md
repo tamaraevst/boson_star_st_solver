@@ -5,3 +5,4 @@
 Where to find things...
  * ``` src ``` - source code with example parameter file.
  * ``` docs ```- brief notes on equations and implementation side of the solver.
+ * ``` post-processing ```- tools for post-processing and plots.
