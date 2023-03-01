@@ -35,8 +35,6 @@ typedef struct param
   double        beta0;
   double        phigrav0;
   int           nzerotarget;
-  double        conv_thresh; // new parameter that we introduce to set up the convergence threshold for the numerical value, 
-                             // once this criteria is satisfied, we deem the solution as 'converged'.
   double        thresh;
   double        mpercentage;
   double        rmatchfac;
@@ -51,14 +49,16 @@ typedef struct param
 
 // Functions
 int    calcExtAsym     ();
+int    calcExtAsym_grav     ();
 void    calcIso         ();
 void    calcMass        ();
 double  calcRadius      ();
 int  calcRadius_index      ();
 int     findFreqMinMax  (double*, double*);
+int     findFreqMinMax_grav  (double*, double*);
 double  findMax         (double*, int, int);
 void    initGrid        (int, double);
-void    intODE          (double, double, double, int*, double*, double*, int*);
+void    intODE          (double, double, double, int*, int*, double*, double*, int*, int*);
 int     mygetline       (char*, FILE*);
 void    out1D           (double*, double*, int, int, const char*);
 void    printPars       ();
@@ -69,6 +69,7 @@ void    rhsBSint        (double*, double*, double*, double*, double*, double*, d
 void    rhsIso          (double*, double, double, double, double);
 int     iofr            (double);
 void    shoot           ();
+void    shoot_grav      ();
 double  V_series        (double);
 double  Vp_series       (double);
 double  V_solitonic     (double);
@@ -100,18 +101,19 @@ model star;
 int main(int argc, char* argv[])
   {
   int i, k;
-  int converged;
+  int success, converged;
   double omBS, mBS, rBS, CBS;
-
-  double initial_omega;
 
   if(argc != 2) { printf("Usage:   %s   <parfile>\n\n", argv[0]); exit(0); }
 
+  // printf("I'm reading params file \n");
   // Parameters
   readPars(argv[1]);
   printPars();
 
-  initial_omega = par.omega0;
+  /*printf("V_series = %g\n", V_series(0.1));
+  printf("V_solitonic = %g\n", V_solitonic(0.1));
+  exit(0);*/
 
   // Register functions
   registerPotential();
@@ -130,19 +132,16 @@ int main(int argc, char* argv[])
   star.psi = (double*) malloc((size_t) par.nint * sizeof(double));
   star.C   = (double*) malloc((size_t) par.nint * sizeof(double));  
 
-  for (k = 0; k < 51; ++k)
-  { 
-    printf("I am starting iteration number: %d\n", k);
-    printf("Gravitational scalar field guess is set to %22.16g\n", par.phigrav0);
-
-    par.omega0 = initial_omega;
-
     // Shoot 
     shoot();
 
     // Calculate exterior
-    converged = calcExtAsym(); //now function calcExtAsym() spits out either 0 if did not coneverge,
-                               // or the matching radius for the gravitational scalar field if it did converge at the end.
+    // converged = calcExtAsym();
+
+    shoot_grav();
+
+    // Calculate exterior
+    converged = calcExtAsym_grav();
     
     // Rescale the time-time component of the metric such that it
     // corresponds to a Schwarzschild exterior.
@@ -150,78 +149,6 @@ int main(int argc, char* argv[])
 
     // Compute diagnostic quantities and transform to isotropic coordinates.
     calcMass();
-
-    //This is where we check whether our criterion is satisfied.
-    int jj = converged;
-
-    double end_mass  = star.m[jj];
-
-    // Criterion for the gravitational field at the radius of matching; criterion is given by requiring 'the derivative is smooth',
-    // equivalently the matching is smooth.
-
-    double delta = end_mass * par.mphigrav0;
-    double factor = pow(star.r[jj], 2+delta) * exp(par.mphigrav0 * star.r[jj]);
-    double denominator = - 1 - delta - star.r[jj] * par.mphigrav0;
-    double derivative_term = (star.phigrav[jj] - star.phigrav[jj-1])/(star.r[jj] - star.r[jj-1]);
-    double constantA = factor * derivative_term / denominator;
-    double varphi_surface = constantA * pow(star.r[jj], - 1 - delta) * exp(-par.mphigrav0 * star.r[jj]);
-    double criterion = star.phigrav[jj] - varphi_surface;
-    
-    printf("Surface boundary condition:   %g\n", varphi_surface);
-    printf("Gravitational scalar field at the surface boundary condition:   %g\n", star.phigrav[jj]);
-
-    if (fabs(criterion) < par.conv_thresh && converged != 0)
-      {
-        rBS  = calcRadius();
-        mBS  = star.m[par.nint-1];
-        omBS = par.omega0;
-        CBS  = findMax(star.C, 0, par.nint-1); 
-        printf("Maximal compactness:   %g\n", CBS);
-        calcIso();
-
-        printf("I get the following difference, %22.16g\n", fabs(criterion));
-        break;
-      } 
-      // If no converegnce has been found, i.e. Nans in some values, then change \varphi_c to something else.
-      else if (converged == 0)
-      {
-        printf("Updating initial value for the gravitational field \n");
-        par.phigrav0 -= 0.001;
-      }
-      // Potentially dangerous territory, if it does not converge at all, but fingers crossed it is fine.
-      // I am a little impatient when it comes to iterations, so we set 50 as the ceiling here.
-      else if (k==50) 
-      {
-        printf("I did not converge \n");
-        exit(0);
-      }
-      // If surface criterion not satisfied to the above tolerance, use Newton-Raphson to improve the guess for \varphi_c.
-      else {
-        printf("I get the following difference, %22.16g\n", fabs(criterion));
-        par.phigrav0 += 1e-05;
-
-        // Calculate the model all over again
-        shoot();
-        converged = calcExtAsym();
-        rescalePhi();
-        calcMass();
-
-        double end_mass_v2  = star.m[jj];
-
-        // Surface criterion of https://iopscience.iop.org/article/10.1088/0264-9381/33/13/135002/pdf Eq.(3.15).
-        double delta_v2 = end_mass * par.mphigrav0;
-        double factor_v2 = pow(star.r[jj], 2+delta) * exp(par.mphigrav0 * star.r[jj]);
-        double denominator_v2 = - 1 - delta_v2 - star.r[jj] * par.mphigrav0;
-        double derivative_term_v2 = (star.phigrav[jj] - star.phigrav[jj-1])/(star.r[jj] - star.r[jj-1]);
-        double constantA_v2 = factor_v2 * derivative_term_v2 / denominator_v2;
-        double varphi_surface_v2 = constantA_v2 * pow(star.r[jj], - 1 - delta_v2) * exp(-par.mphigrav0 * star.r[jj]);
-        double criterion_v2 = star.phigrav[jj] - varphi_surface_v2;
-
-        double criterion_derivative = (criterion_v2 - criterion) / (1e-05);
-    
-        par.phigrav0 -= (1e-05 + criterion/criterion_derivative);
-           }
-  }
 
   // IO
   out1D(star.r, star.X, 0, par.nint-1, "X.dat");
@@ -233,6 +160,7 @@ int main(int argc, char* argv[])
   out1D(star.r, star.m, 0, par.nint-1, "m.dat");
   out1D(star.r, star.R, 0, par.nint-1, "RisoofR.dat");
   out1D(star.R, star.f, 0, par.nint-1, "fofriso.dat");
+  //out1D(star.R, star.psi, 0, par.nint-1, "psiofriso.dat");
   out1D(star.R, star.A, 0, par.nint-1, "Aofriso.dat");
 
   printf("\n===================================================\n");
@@ -247,7 +175,7 @@ void shoot()
   {
   int    cnt, success;
   double om, ommin, ommax;
-  int    nzero, sigA;
+  int    nzero, phigravnzero, sigA, phigravsig;
   double rstop, rstopgrav;
 
 
@@ -255,9 +183,11 @@ void shoot()
   printf("omega               Zero crossings            Rstop          sigA\n");
   printf("=================================================================\n");
 
+  // printf("I'm setting up the grid \n");
   // Grid setup
   initGrid(par.nint, par.rmax);
 
+  // printf("I'm searching for min and max frequency \n");
   // (1) Find an upper and a lower limit for the frequency. This is done
   //     in findFreqMinMax, starting with omega=1 and then doubling or
   //     halving the value; see comments in that function. Should this
@@ -280,7 +210,7 @@ void shoot()
   while( (ommax - ommin) > par.thresh )
     {
     om = 0.5 * (ommin + ommax);
-    intODE(par.A0, par.phigrav0, om, &nzero, &rstop, &rstopgrav, &sigA);
+    intODE(par.A0, par.phigrav0, om, &nzero, &phigravnzero, &rstop, &rstopgrav, &sigA, &phigravsig);
     printf("%26.20g          %d          %15.7g           %d\n",
                om, nzero, rstop, sigA);
     if( nzero > par.nzerotarget)
@@ -309,18 +239,88 @@ void shoot()
   else if(strcmp(par.minmax, "max") == 0)
     par.omega0 = ommax;
   else
-    { printf("Invalid value minmax = %s\n\n", par.minmax); exit(0); }  
-}
+    { printf("Invalid value minmax = %s\n\n", par.minmax); exit(0); }
+  }
 
 /*==========================================================================*/
-// In all the cases that are 'physical' solutions I found the bosonic scalar field falls off faster than
-// the gravitational scalar field, so we first match the boson scalar field and then the gravitational scalar field.
-// In principle, we do not rule out that a complate reverse may happen, so we check whose radius of matching is
-// smaller and then match the scalar fields in appropriate order.
+
+void shoot_grav()
+  {
+  int    cnt, success;
+  double phigrav, phigravmin, phigravmax;
+  int    nzero, nzerophigrav, sigA, sigphigrav;
+  double istop, phigravstop, rstop, rstopgrav;
+
+
+  printf("\n");
+  printf("phigrav               Zero crossings            Rstop            RstopGrav          sigphigrav\n");
+  printf("===========================================================================================\n");
+
+  // printf("I'm setting up the grid \n");
+  // Grid setup
+
+  // printf("I'm searching for min and max frequency \n");
+  // (1) Find an upper and a lower limit for the frequency. This is done
+  //     in findFreqMinMax, starting with omega=1 and then doubling or
+  //     halving the value; see comments in that function. Should this
+  //     search fail, we quit.
+  success = findFreqMinMax_grav(&phigravmin, &phigravmax);
+  if(success == 0)
+    { printf("Could not find phimin and phimax in shoot\n"); exit(0);}
+  else
+    printf("Using   phigrav in   [%22.16g,   %22.16g]\n", phigravmin, phigravmax);
+
+  // (2) Now we finetune the frequency such that it sits right on the
+  //     threshold between nzerotarget and nzerotarget+1. This is the
+  //     model we seek with nzerotarget zero crossings.
+  printf("\n");
+  printf("phigrav               Zero crossings            Rstop            RstopGrav          sigphigrav\n");
+  printf("==========================================================================================\n");
+
+  cnt = 0;
+  while( (phigravmax - phigravmin) > par.thresh )
+    {
+    phigrav = 0.5 * (phigravmin + phigravmax);
+    intODE(par.A0, phigrav, par.omega0, &nzero, &nzerophigrav, &rstop, &rstopgrav, &sigA, &sigphigrav);
+    printf("%26.20g          %d          %15.7g           %15.7g           %d\n",
+               phigrav, nzerophigrav, rstopgrav, sigphigrav);
+    if( nzerophigrav > par.nzerotarget)
+      phigravmax = phigrav;  // the test frequency is still an upper limit
+    else
+      phigravmin = phigrav;
+
+    // If we fail to reach the threshold over many iterations, we likely
+    // hit round-off error and reduce the accuracy requirement.
+    cnt++;
+    if(cnt > 100)
+      {
+      par.thresh *= 10;
+      cnt = 0;
+      printf("Changed threshold to   %g\n", par.thresh);
+      }
+
+    //printf("%22.16g   %22.16g\n", ommax - ommin, par.thresh);
+    }
+
+  // ommin gives our best estimate for the model, since it has
+  // nzero zero crossings whereas ommax has one zero crossing more.
+  // We store this frequency in the parameter omega0 for further use.
+  if(strcmp(par.minmax, "min") == 0)
+    { 
+      par.phigrav0 = phigravmin;
+      printf("Using value phigrav0 = %g\n", par.phigrav0);
+    }
+  else if(strcmp(par.minmax, "max") == 0)
+    par.phigrav0 = phigravmax;
+  else
+    { printf("Invalid value minmax = %s\n\n", par.minmax); exit(0); }
+  }
+
+/*==========================================================================*/
 
 int calcExtAsym()
   {
-  int    i, k, nzero, sigA, istop, istopgrav, imatchgrav, imatch;
+  int    i, k, nzero, phigravnzero, sigA, phigravsig, istop, istopgrav, imatchgrav, imatch;
   double rstop, rstopgrav, c1, c2, c3, c4, epsilon, delta, mass, matchPhi;
   double r, X, Phi, A, eta, Psi0, phigrav, rhs_X, rhs_Phi, rhs_A, rhs_phigrav, rhs_Psi0, rhs_eta, om, mphigrav, dr;
   // double dX[5], deta[5], dphigrav[5], dPhi[5];
@@ -333,15 +333,22 @@ int calcExtAsym()
   // exterior. Note that we are not yet rescaling time and frequency
   // yet, since we will need the complete profile with exterior to do
   // that.
-
-  intODE(par.A0, par.phigrav0, par.omega0, &nzero, &rstop, &rstopgrav, &sigA);
+  intODE(par.A0, par.phigrav0, par.omega0, &nzero, &phigravnzero, &rstop, &rstopgrav, &sigA, &phigravsig);
   printf("------------------------------------------------------------------------------------------------------\n");
   printf("%22.16g          %d          %15.7g          %15.7g           %d\n",
          par.omega0, nzero, rstop, rstopgrav, sigA);
   printf("------------------------------------------------------------------------------------------------------\n");
 
-  //Where do we match the bosonic scalar field?
 
+  // We now have a model that either drops in scalar amplitude all
+  // the way to the edge of our grid (unlikely) or will diverge
+  // somewhere along our grid towards either positive or negative
+  // values. We regularize this divergence and replace it with a
+  // smooth exterior solution as follows:
+  // (1) Search backwards from the truncation point (rstop -- for
+  //     which we need to find the index) until we find a minimum
+  //     in abs(A). That is the point from which we construct the
+  //     exterior.
   istop = iofr(rstop);
   for(i = istop-1; i > 0; i--)
   {
@@ -358,6 +365,211 @@ int calcExtAsym()
   imatch = iofr(star.r[i]*par.rmatchfac);
 
   printf("Matching the bosonic field to exterior at   r[%d] = %g\n\n", imatch, star.r[imatch]);
+
+  // istopgrav = iofr(rstopgrav);
+  // for(k = istopgrav-1; k > 0; k--)
+  // {
+  //   if(fabs(star.phigrav[k])<fabs(star.phigrav[k+1]) && fabs(star.phigrav[k])<fabs(star.phigrav[k-1]))
+  //     break;
+  // }
+
+  // printf("\nphigrav[%d] = %g   phigrav[%d] = %g   phigrav[%d] = %g\n",
+  //        k-1, star.phigrav[k-1], k, star.phigrav[k], k+1, star.phigrav[k+1]);
+
+  if(i == 1)
+    { printf("Search for matching point yielded i = 1\n\n"); exit(0); }
+
+  // if(k == 0)
+  //   { 
+  //     printf("Search for matching point yielded k = 0\n\n");
+  //     imatchgrav = i;
+  //    }
+  // else
+  //   {imatchgrav = iofr(star.r[k] * par.rmatchfac);}
+  
+  // printf("Matching the gravitational field to exterior at   r[%d] = %g\n\n", imatchgrav, star.r[imatchgrav]);
+  
+  // (2) We now match the scalar amplitude to an exterior function
+  //
+  //       A   = c1 * exp(-r * sqrt(1-om^2 / alpha^2)) / r
+  //       eta = c1 * exp(-r * sqrt(1-om^2 / alpha^2)) / r
+  //
+  //     and determine c1 and c2 through matching to A[imatch] and
+  //     eta[imatch]. Note that for asymptotic behaviour of eta,
+  //     we ignore here a contribution \propto exp(-...) / r^2.
+  //     We could formally integrate eta from A, but that deviates
+  //     more strongly from the asymptotic limit \eta -> 0 at infinity.
+  mphigrav = par.mphigrav0;
+  r   = star.r[imatch];
+
+  // Need to rescale \omega according to asymptotic condition of the lapse function, \alpha
+  om  = par.omega0 * sqrt(F(star.phigrav[imatch])) * exp(-star.Phi[imatch]);
+
+  calcMass();
+
+  mass = star.m[imatch];
+
+  epsilon = mass * (1 - 2*om*om)/sqrt(1-om*om);
+  delta = mass * mphigrav;
+
+  //Check that h<2k condition is satisfied in the asymptotics
+  double condition1 = mphigrav - 2 * sqrt(1 - om*om);
+  
+  printf("Condition for asymptotics check = %g \n", condition1);
+
+  //Find constants of matching
+  c1 = star.A[imatch] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
+  c2 = star.Psi0[imatch] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
+
+  printf("\nc1, c2 = %g   %g\n", c1, c2);
+
+  //Integrate outwards once again
+  for(i = imatch+1; i < imatchgrav; i++)
+    {
+    dr  = star.r[i] - star.r[i-1];
+
+    // 1st RK step
+    r   = star.r[i-1];
+    X   = star.X[i-1];
+    Phi = star.Phi[i-1];
+    phigrav = star.phigrav[i-1];
+    eta = star.eta[i-1];
+    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[1]   = rhs_X * dr;
+    dPhi[1] = rhs_Phi * dr;
+    dphigrav[1] = rhs_phigrav * dr;
+    deta[1] = rhs_eta * dr;
+
+    // 2nd RK step
+    r   = star.r[i-1]   + 0.5 * dr;
+    X   = star.X[i-1]   + 0.5 * dX[1];
+    Phi = star.Phi[i-1] + 0.5 * dPhi[1];
+    phigrav = star.phigrav[i-1] + 0.5 * dphigrav[1];
+    eta = star.eta[i-1] + 0.5 * deta[1];
+    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[2]   = rhs_X * dr;
+    dPhi[2] = rhs_Phi * dr;
+    dphigrav[2] = rhs_phigrav * dr;
+    deta[2] = rhs_eta * dr;
+
+    // 3rd RK step
+    r   = star.r[i-1]   + 0.5 * dr;
+    X   = star.X[i-1]   + 0.5 * dX[2];
+    Phi = star.Phi[i-1] + 0.5 * dPhi[2];
+    phigrav = star.phigrav[i-1] + 0.5 * dphigrav[2];
+    eta = star.eta[i-1] + 0.5 * deta[2];
+    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[3]   = rhs_X * dr;
+    dPhi[3] = rhs_Phi * dr;
+    dphigrav[3] = rhs_phigrav * dr;
+    deta[3] = rhs_eta * dr;
+
+    // 4th RK step
+    r   = star.r[i];
+    X   = star.X[i-1]   + dX[3];
+    Phi = star.Phi[i-1] + dPhi[3];
+    phigrav = star.phigrav[i-1] + dphigrav[3];
+    eta = star.eta[i-1] + deta[3];
+    A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
+    dX[4]   = rhs_X * dr;
+    dPhi[4] = rhs_Phi * dr;
+    dphigrav[4] = rhs_phigrav * dr;
+    deta[4] = rhs_eta * dr;
+
+    // Update variables
+    star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
+    star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
+    star.phigrav[i] = star.phigrav[i-1] + (dphigrav[1]+ 2*dphigrav[2]+ 2*dphigrav[3]+dphigrav[4]) / 6.0;
+    star.eta[i] = star.eta[i-1] + (deta[1]+ 2*deta[2]+ 2*deta[3]+deta[4]) / 6.0;
+    r   = star.r[i];
+    star.A[i] = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    star.Psi0[i] = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+    }
+
+  //Sanity check for NaNs
+  if (isnan(c1)|| isnan(c2) || isnan(c3) || isnan(c4) || isnan(star.Phi[par.nint]) || isnan(star.phigrav[par.nint-1]) || isnan(star.X[par.nint]))
+  { if (isnan(star.Phi[par.nint]))
+          {printf("Phi is nan on the grid boundary \n");}
+    if (isnan(star.phigrav[par.nint-1]))
+          {printf("Gravitational scalar field is nan on the grid boundary \n");}
+    if (isnan(star.X[par.nint]))
+          {printf("X is nan on the grid boundary \n");}
+    return 0;}
+  else
+  { return imatchgrav;}
+  // Overwrite eta with the derivative of A?
+  // This is introduces kinks in the eta profile and we do not use it.
+  /*for(i = imatch+1; i < par.nint; i++)
+    {
+    if(i < par.nint-1)
+      star.eta[i] = (star.A[i+1] - star.A[i-1]) / (star.r[i+1] - star.r[i-1])
+                    / star.X[i];
+    else
+      star.eta[i] = (star.A[i] - star.A[i-1]) / (star.r[i] - star.r[i-1])
+                    / (0.5 * (star.X[i] + star.X[i-1]));
+    }*/
+  }
+
+/*==========================================================================*/
+
+int calcExtAsym_grav()
+  {
+  int    i, k, nzero, phigravnzero, sigA, phigravsig, istop, istopgrav, imatchgrav, imatch;
+  double rstop, rstopgrav, c1, c2, c3, c4, epsilon, delta, mass, matchPhi;
+  double r, X, Phi, A, eta, Psi0, phigrav, rhs_X, rhs_Phi, rhs_A, rhs_phigrav, rhs_Psi0, rhs_eta, om, mphigrav, dr;
+  // double dX[5], deta[5], dphigrav[5], dPhi[5];
+  double dX[5], deta[5], dphigrav[5], dPhi[5], dA[5], dPsi0[5];
+
+
+  // At this stage we have the correct frequency from the shooting
+  // algorithm. Here we will compute this model and also remove
+  // the diverging part in the profile and replace it with a smooth
+  // exterior. Note that we are not yet rescaling time and frequency
+  // yet, since we will need the complete profile with exterior to do
+  // that.
+  intODE(par.A0, par.phigrav0, par.omega0, &nzero, &phigravnzero, &rstop, &rstopgrav, &sigA, &phigravsig);
+  printf("------------------------------------------------------------------------------------------------------\n");
+  printf("%22.16g          %d          %15.7g          %15.7g           %d\n",
+         par.phigrav0, phigravnzero, rstop, rstopgrav, phigravsig);
+  printf("------------------------------------------------------------------------------------------------------\n");
+
+
+  // We now have a model that either drops in scalar amplitude all
+  // the way to the edge of our grid (unlikely) or will diverge
+  // somewhere along our grid towards either positive or negative
+  // values. We regularize this divergence and replace it with a
+  // smooth exterior solution as follows:
+  // (1) Search backwards from the truncation point (rstop -- for
+  //     which we need to find the index) until we find a minimum
+  //     in abs(A). That is the point from which we construct the
+  //     exterior.
+  istop = iofr(rstop);
+  for(i = istop-1; i > 0; i--)
+  {
+    if(fabs(star.A[i])<fabs(star.A[i+1]) && fabs(star.A[i])<fabs(star.A[i-1]))
+      break;
+  }
+
+  printf("\nA[%d] = %g   A[%d] = %g   A[%d] = %g\n",
+         i-1, star.A[i-1], i, star.A[i], i+1, star.A[i+1]);
+
+  if(i == 1)
+    { printf("Search for matching point yielded i = 1\n\n"); exit(0); }
+
+  imatch = iofr(star.r[i]*par.rmatchfac);
+
+  printf("Matching the bosonic field to exterior at   r[%d] = %g\n\n", imatch, star.r[imatch]);
+
+  if(i == 1)
+    { printf("Search for matching point yielded i = 1\n\n"); exit(0); }
 
   // Where do we match the gravitational scalar field?
 
@@ -388,7 +600,7 @@ int calcExtAsym()
     {imatchgrav = iofr(star.r[k]*par.rmatchfac);}
 
   printf("Matching the gravitational field to exterior at   r[%d] = %g\n\n", imatchgrav, star.r[imatchgrav]);
-
+  
   mphigrav = par.mphigrav0;
 
   if (imatchgrav > imatch)
@@ -517,7 +729,7 @@ int calcExtAsym()
     printf("\nc1, c2 = %g   %g\n", c1, c2);
     printf("c3, c4 = %g   %g\n", c3, c4);
 
-    //Integrate outwards once again, now we macth both scalar fields here
+    //Integrate outwards once again
     for(i = imatchgrav+1; i < par.nint; i++)
       {
       dr  = star.r[i] - star.r[i-1];
@@ -526,6 +738,8 @@ int calcExtAsym()
       r   = star.r[i-1];
       X   = star.X[i-1];
       Phi = star.Phi[i-1];
+      // A = star.A[i-1];
+      // Psi0 = star.Psi0[i-1];
       A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
@@ -533,11 +747,15 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[1]   = rhs_X * dr;
       dPhi[1] = rhs_Phi * dr;
+      // dA[1]   = rhs_A * dr;
+      // dPsi0[1] = rhs_Phi * dr;
 
       // 2nd RK step
       r   = star.r[i-1]   + 0.5 * dr;
       X   = star.X[i-1]   + 0.5 * dX[1];
       Phi = star.Phi[i-1] + 0.5 * dPhi[1];
+      // A   = star.A[i-1]   + 0.5 * dA[1];
+      // Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[1];
       A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
@@ -545,11 +763,15 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[2]   = rhs_X * dr;
       dPhi[2] = rhs_Phi * dr;
+      // dA[2]   = rhs_A * dr;
+      // dPsi0[2] = rhs_Psi0 * dr;
 
       // 3rd RK step
       r   = star.r[i-1]   + 0.5 * dr;
       X   = star.X[i-1]   + 0.5 * dX[2];
       Phi = star.Phi[i-1] + 0.5 * dPhi[2];
+      // A   = star.A[i-1]   + 0.5 * dA[2];
+      // Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[2];
       A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
@@ -557,11 +779,15 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[3]   = rhs_X * dr;
       dPhi[3] = rhs_Phi * dr;
+      // dA[3]   = rhs_A * dr;
+      // dPsi0[3] = rhs_Psi0 * dr;
 
       // 4th RK step
       r   = star.r[i];
       X   = star.X[i-1]   + dX[3];
       Phi = star.Phi[i-1] + dPhi[3];
+      // A   = star.A[i-1]   + dA[3];
+      // Psi0 = star.Psi0[i-1] + dPsi0[3];
       A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
@@ -569,6 +795,8 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[4]   = rhs_X * dr;
       dPhi[4] = rhs_Phi * dr;
+      // dA[4]   = rhs_A * dr;
+      // dPsi0[4] = rhs_Psi0 * dr;
 
       // Update variables
       star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
@@ -576,6 +804,8 @@ int calcExtAsym()
       r   = star.r[i];
       star.A[i]   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       star.Psi0[i] = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      // star.A[i]   = star.A[i-1]   + (dA[1]  + 2*dA[2]  + 2*dA[3]  + dA[4] ) / 6.0;
+      // star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
       star.phigrav[i] = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       star.eta[i] = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       }
@@ -604,6 +834,8 @@ int calcExtAsym()
     printf("Condition for asymptotics check = %g \n", condition1);
 
     //Find constants of matching
+    // c1 = star.A[imatchgrav] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
+    // c2 = star.Psi0[imatchgrav] * pow(r, 1 + epsilon) * exp(r * sqrt(1 - om*om));
     c3 = star.phigrav[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
     c4 = star.eta[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
 
@@ -621,6 +853,8 @@ int calcExtAsym()
       Phi = star.Phi[i-1];
       A   = star.A[i-1];
       Psi0 = star.Psi0[i-1];
+      // A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      // Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
@@ -635,6 +869,8 @@ int calcExtAsym()
       Phi = star.Phi[i-1] + 0.5 * dPhi[1];
       A   = star.A[i-1]   + 0.5 * dA[1];
       Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[1];
+      // A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      // Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
@@ -649,6 +885,8 @@ int calcExtAsym()
       Phi = star.Phi[i-1] + 0.5 * dPhi[2];
       A   = star.A[i-1]   + 0.5 * dA[2];
       Psi0 = star.Psi0[i-1] + 0.5 * dPsi0[2];
+      // A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      // Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
@@ -663,6 +901,8 @@ int calcExtAsym()
       Phi = star.Phi[i-1] + dPhi[3];
       A   = star.A[i-1]   + dA[3];
       Psi0 = star.Psi0[i-1] + dPsi0[3];
+      // A   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      // Psi0 = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       phigrav = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       eta = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta); 
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
@@ -675,23 +915,29 @@ int calcExtAsym()
       star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
       star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
       r   = star.r[i];
+      // star.A[i]   = c1 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
+      // star.Psi0[i] = c2 * exp(-r * sqrt(1 - om*om)) * pow(r, - 1 - epsilon);
       star.A[i]   = star.A[i-1]   + (dA[1]  + 2*dA[2]  + 2*dA[3]  + dA[4] ) / 6.0;
       star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
       star.phigrav[i] = c3 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       star.eta[i] = c4 * exp(-r * mphigrav) * pow(r, - 1 - delta);
       }
 
+  //   printf("A is %g \n", star.A[imatch-2]);
+
     // Begin to match the bosonic scalar field
     r   = star.r[imatch];
 
     // Need to rescale \omega according to asymptotic condition of the lapse function, \alpha
     om  = par.omega0 * sqrt(F(star.phigrav[imatch])) * exp(-star.Phi[imatch]);
+    // printf("om = %g \n", om);
 
     calcMass();
 
     mass = star.m[imatch];
 
     epsilon = mass * (1 - 2*om*om)/sqrt(1-om*om);
+    // printf("epsilonvalue = %g \n", epsilon);
     delta = mass * mphigrav;
 
     //Check that h<2k condition is satisfied in the asymptotics
@@ -707,7 +953,7 @@ int calcExtAsym()
     
     printf("\nc1, c2 = %g   %g\n", c1, c2);
 
-    //Integrate outwards once again, match both scalar fields now
+    //Integrate outwards once again
     for(i = imatch+1; i < par.nint; i++)
       {
       dr  = star.r[i] - star.r[i-1];
@@ -723,6 +969,8 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[1]   = rhs_X * dr;
       dPhi[1] = rhs_Phi * dr;
+      // dphigrav[1] = rhs_phigrav * dr;
+      // deta[1] = rhs_eta * dr;
 
       // 2nd RK step
       r   = star.r[i-1]   + 0.5 * dr;
@@ -735,6 +983,8 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[2]   = rhs_X * dr;
       dPhi[2] = rhs_Phi * dr;
+      // dphigrav[2] = rhs_phigrav * dr;
+      // deta[2] = rhs_eta * dr;
 
       // 3rd RK step
       r   = star.r[i-1]   + 0.5 * dr;
@@ -747,6 +997,8 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[3]   = rhs_X * dr;
       dPhi[3] = rhs_Phi * dr;
+      // dphigrav[3] = rhs_phigrav * dr;
+      // deta[3] = rhs_eta * dr;
 
       // 4th RK step
       r   = star.r[i];
@@ -759,6 +1011,8 @@ int calcExtAsym()
       rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
       dX[4]   = rhs_X * dr;
       dPhi[4] = rhs_Phi * dr;
+      // dphigrav[4] = rhs_phigrav * dr;
+      // deta[4] = rhs_eta * dr;
 
       // Update variables
       star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
@@ -784,8 +1038,8 @@ int calcExtAsym()
     { printf("I've matched the gravittaional scalar field at radius = %g \n", star.r[imatchgrav]);
       printf("The value of the field at that point = %g \n", star.phigrav[imatchgrav]);
       return imatchgrav;}
-  
-  // Overwrite eta with the derivative of A?
+
+      // Overwrite eta with the derivative of A?
   // This is introduces kinks in the eta profile and we do not use it.
   /*for(i = imatch+1; i < par.nint; i++)
     {
@@ -821,7 +1075,7 @@ int iofr(double rtarget)
 int  findFreqMinMax(double* ommin, double* ommax)
   {
   double rstop, rstopgrav;
-  int    sigA, nzero, cnt, cntmax;
+  int    sigA, phigravsig, nzero, phigravnzero, cnt, cntmax;
 
 
   // Our strategy is as follows. We use the fact that the number of
@@ -837,7 +1091,7 @@ int  findFreqMinMax(double* ommin, double* ommax)
   // If the resulting n<=ntarget, we double omega0 until we have
   // n > ntarget and the ensuing omega0 values are our brackets.
 
-  intODE(par.A0, par.phigrav0, par.omega0, &nzero, &rstop, &rstopgrav, &sigA);
+  intODE(par.A0, par.phigrav0, par.omega0, &nzero, &phigravnzero, &rstop, &rstopgrav, &sigA, &phigravsig);
   printf("%15.10g          %d          %15.7g           %d\n",
          par.omega0, nzero, rstop, sigA);
   cnt    = 0;           // cnt is a sanity measure to avoid hanging
@@ -852,7 +1106,7 @@ int  findFreqMinMax(double* ommin, double* ommax)
       {
       *ommax = *ommin;
       *ommin /= 2;
-      intODE(par.A0, par.phigrav0, *ommin, &nzero, &rstop, &rstopgrav, &sigA);
+      intODE(par.A0, par.phigrav0, *ommin, &nzero, &phigravnzero, &rstop, &rstopgrav, &sigA, &phigravsig);
       printf("%15.10g          %d          %15.7g           %d\n",
              *ommin, nzero, rstop, sigA);
       cnt++;
@@ -865,7 +1119,7 @@ int  findFreqMinMax(double* ommin, double* ommax)
       {
       *ommin = *ommax;
       *ommax *= 2;
-      intODE(par.A0, par.phigrav0, *ommax, &nzero, &rstop, &rstopgrav, &sigA);
+      intODE(par.A0, par.phigrav0, *ommax, &nzero, &phigravnzero, &rstop, &rstopgrav, &sigA, &phigravsig);
       printf("%15.10g          %d          %15.7g           %d\n",
              *ommax, nzero, rstop, sigA);
       cnt++;
@@ -880,7 +1134,69 @@ int  findFreqMinMax(double* ommin, double* ommax)
 
 /*==========================================================================*/
 
-void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop, double* rstopgrav, int* sigAstop)
+int  findFreqMinMax_grav(double* phigravmin, double* phigravmax)
+  {
+  double rstop, rstopgrav;
+  int    sigA, sigphigrav, nzero, nzerophigrav, cnt, cntmax;
+
+
+  // Our strategy is as follows. We use the fact that the number of
+  // zero crossings is a non-decreasing function of the frequency;
+  // increasing omega0 gives you at least as many zero crossings as
+  // before. We have a target, ntarget. We compute the number of zero
+  // crossings for omega0 = 1.
+  // If the resulting n>ntarget, we half omega0 until n <= ntarget
+  // (note that the stable BS is always the limiting case to have
+  // one more zero crossing -- the new crossing is at infinity in
+  // the limiting case). Once we have n <= ntarget, the corresponding
+  // two omega0 values are the brackets.
+  // If the resulting n<=ntarget, we double omega0 until we have
+  // n > ntarget and the ensuing omega0 values are our brackets.
+
+  intODE(par.A0, par.phigrav0, par.omega0, &nzero, &nzerophigrav, &rstop, &rstopgrav, &sigA, &sigphigrav);
+  printf("%15.10g          %d          %15.7g           %d\n",
+         par.phigrav0, nzerophigrav, rstopgrav, sigphigrav);
+  cnt    = 0;           // cnt is a sanity measure to avoid hanging
+  cntmax = 100;         // in the loop forever. It should never be
+                        // triggered unless the frequency has values
+                        // of 2^{1000} or 2^{-100}...
+
+  if(nzerophigrav > par.nzerotarget)
+    {
+    *phigravmin = par.phigrav0;
+    while(nzerophigrav > par.nzerotarget && cnt < cntmax)
+      {
+      *phigravmax = *phigravmin;
+      *phigravmin /= 2;
+      intODE(par.A0, *phigravmin, par.omega0, &nzero, &nzerophigrav, &rstop, &rstopgrav, &sigA, &sigphigrav);
+      printf("%15.10g          %d          %15.7g           %d\n",
+             *phigravmin, nzerophigrav, rstopgrav, sigphigrav);
+      cnt++;
+      }
+    }
+  else
+    {
+    *phigravmax = par.phigrav0;
+    while(nzerophigrav <= par.nzerotarget && cnt < cntmax)
+      {
+      *phigravmin = *phigravmax;
+      *phigravmax *= 2;
+      intODE(par.A0, *phigravmax, par.omega0, &nzero, &nzerophigrav, &rstop, &rstopgrav, &sigA, &sigphigrav);
+      printf("%15.10g          %d          %15.7g           %d\n",
+             *phigravmax, nzerophigrav, rstopgrav, sigphigrav);
+      cnt++;
+      }
+    }
+
+  if(cnt == cntmax)
+    return 0;   // Either upper or lower frequency limit has not been found.
+  else
+    return 1;
+  }
+
+/*==========================================================================*/
+
+void intODE(double A0, double phigrav0, double omega, int* nzero, int* phigravnzero, double* rstop, double* rstopgrav, int* sigAstop, int* phigravsig)
   {
   int    i, n1, istop, phigravstop;
   double dr, r, X, A, eta, Phi, Psi0, phigrav, om;
@@ -891,10 +1207,11 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
   om = omega;
 
   *nzero = 0;
+  *phigravnzero = 0;
   *rstop = star.r[n1-1];
   *rstopgrav = star.r[n1-1];
   istop  = -1;   // So we have no vacuum region unless we exceed the amplitude
-
+  
   // Central values
   star.X[0]   = 1;
   star.A[0]   = A0;
@@ -903,6 +1220,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
   star.eta[0] = 0;
   star.Phi[0] = 0;   // Phi has a free constant we later match to Schwarzschild
 
+  // printf("I'm doing RK integration for the first time here \n");
   // RK integration
   for(i = 1; i < n1; i++)
     {
@@ -995,11 +1313,15 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
 
     if(star.A[i] * star.A[i-1] < 0) (*nzero)++;   // Zero crossing found
 
-    //Do the same inspection for \phigrav!
     if(fabs(star.phigrav[i]) > 2*star.phigrav[5000] || star.phigrav[i] != star.phigrav[i])
       {
+        *phigravsig = ( (star.phigrav[i-1] > 0) - (star.phigrav[i-1] < 0) );
         phigravstop = i - 1;   // We stop the integration; one point as sanity buffer
+        // printf("phigravstop: %22.16g \n", star.r[phigravstop]);
+        if(star.phigrav[i-1] * star.phigrav[i-2] < 0) (*phigravnzero)--;
       }
+
+      if(star.phigrav[i] * star.phigrav[i-1] < 0) (*phigravnzero)++;   // Zero crossing found
     }
 
   if(istop < 0)
@@ -1009,15 +1331,14 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     return;   // Integration went through; no need for vacuum
     }
 
-  // Set to vacuum beyond rstop and rstopgrav
+  // Set to vacuum beyond rstop
   *rstop = star.r[istop];
   *rstopgrav = star.r[phigravstop];
 
-  // Usually the gravitational scalar forld goes bonkers a little sooner than the bosonic scalar field
-  // so we set to zero the gravitational scalar field to zero first and keep on integrating out the
-  // bosonic scalar field to istop limit.
+  // printf("boson stop: %22.16g \n", star.r[istop]);
+  // printf("noboson stop: %22.16g \n", star.r[phigravstop]);
 
-  if (istop > phigravstop)
+  if (phigravstop > istop)
   {
   for(i = phigravstop; i < istop; i++)
     {
@@ -1028,67 +1349,93 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     X   = star.X[i-1];
     A   = star.A[i-1];
     Psi0   = star.Psi0[i-1];
+    // A   = 0;
+    // Psi0 = 0;
     phigrav = 0;
     eta = 0;
+    // phigrav = star.phigrav[i-1];
+    // eta = star.eta[i-1];
     Phi = star.Phi[i-1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[1]   = rhs_A * dr;
     dPsi0[1] = rhs_Psi0 * dr;
     dA[1]   = rhs_X * dr;
     dPhi[1] = rhs_Phi * dr;
+    // dphigrav[1] = rhs_phigrav * dr;
+    // deta[1] = rhs_eta * dr;
 
     // 2nd RK step
     r   = star.r[i-1] + 0.5 * dr;
     X   = star.X[i-1] + 0.5 * dX[1];
     A   = star.A[i-1] + 0.5 * dA[1];
     Psi0   = star.Psi0[i-1] + 0.5 * dPsi0[1];
+    // A   = 0;
+    // Psi0 = 0;
     phigrav = 0;
     eta = 0;
+    // phigrav = star.phigrav[i-1] + 0.5 * dphigrav[1];
+    // eta = star.eta[i-1] + 0.5 * deta[1];
     Phi = star.Phi[i-1] + 0.5 * dPhi[1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[2]   = rhs_X * dr;
     dPhi[2] = rhs_Phi * dr;
     dA[2]   = rhs_A * dr;
     dPsi0[2] = rhs_Psi0 * dr;
+    // dphigrav[2] = rhs_phigrav * dr;
+    // deta[2] = rhs_eta * dr;
 
     // 3rd RK step
     r   = star.r[i-1] + 0.5 * dr;
     X   = star.X[i-1] + 0.5 * dX[2];
     A   = star.A[i-1] + 0.5 * dA[2];
     Psi0   = star.Psi0[i-1] + 0.5 * dPsi0[2];
+    // A   = 0;
+    // Psi0 = 0;
     phigrav   = 0;
     eta = 0;
+    // phigrav   = star.phigrav[i-1] + 0.5 * dphigrav[2];
+    // eta = star.eta[i-1] + 0.5 * deta[2];
     Phi = star.Phi[i-1] + 0.5 * dPhi[2];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[3]   = rhs_X * dr;
     dPhi[3] = rhs_Phi * dr;
     dA[3]   = rhs_A * dr;
     dPsi0[3] = rhs_Psi0 * dr;
+    // dphigrav[3] = rhs_phigrav * dr;
+    // deta[3] = rhs_eta * dr;
 
     // 4th RK step
     r   = star.r[i];
     X   = star.X[i-1] + dX[3];
     A   = star.A[i] + dA[3];
     Psi0   = star.Psi0[i-1] + dPsi0[3];
+    // A   = 0;
+    // Psi0 = 0;
     phigrav = 0;
     eta = 0;
+    // phigrav = star.phigrav[i-1] + dphigrav[3];
+    // eta = star.eta[i-1] + deta[3];
     Phi = star.Phi[i-1] + dPhi[3];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[4]   = rhs_X * dr;
     dPhi[4] = rhs_Phi * dr;
     dA[4]   = rhs_A * dr;
     dPsi0[4] = rhs_Psi0 * dr;
+    // dphigrav[4] = rhs_phigrav * dr;
+    // deta[4] = rhs_eta * dr;
 
     // Update variables
     star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
+    // star.A[i]   = 0;
+    // star.Psi0[i] = 0;
     star.A[i]   = star.A[i-1]   + (dA[1]  + 2*dA[2]  + 2*dA[3]  + dA[4] ) / 6.0;
     star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
     star.phigrav[i] = 0;
     star.eta[i]   = 0;
+    // star.phigrav[i] = star.phigrav[i-1]   + (dphigrav[1]  + 2*dphigrav[2]  + 2*dphigrav[3]  + dphigrav[4] ) / 6.0;
+    // star.eta[i]   = star.eta[i-1]   + (deta[1]  + 2*deta[2]  + 2*deta[3]  + deta[4] ) / 6.0;
     star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
     }
-
-    // Now it's time to set the bosonic scalar field to zero
 
     for(i = istop; i < n1; i++)
     {
@@ -1152,9 +1499,9 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     }
   }
 
-   if (istop > phigravstop)
+  if (istop > phigravstop)
   {
-  for(i = istop; i < phigravstop; i++)
+  for(i = istop; i < istop; i++)
     {
     dr  = star.r[i] - star.r[i-1];
 
@@ -1165,12 +1512,15 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     Psi0   = star.Psi0[i-1];
     A   = 0;
     Psi0 = 0;
-
+    // phigrav = 0;
+    // eta = 0;
     phigrav = star.phigrav[i-1];
     eta = star.eta[i-1];
     Phi = star.Phi[i-1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[1]   = rhs_A * dr;
+    // dPsi0[1] = rhs_Psi0 * dr;
+    // dA[1]   = rhs_X * dr;
     dPhi[1] = rhs_Phi * dr;
     dphigrav[1] = rhs_phigrav * dr;
     deta[1] = rhs_eta * dr;
@@ -1178,42 +1528,60 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     // 2nd RK step
     r   = star.r[i-1] + 0.5 * dr;
     X   = star.X[i-1] + 0.5 * dX[1];
+    // A   = star.A[i-1] + 0.5 * dA[1];
+    // Psi0   = star.Psi0[i-1] + 0.5 * dPsi0[1];
     A   = 0;
     Psi0 = 0;
+    // phigrav = 0;
+    // eta = 0;
     phigrav = star.phigrav[i-1] + 0.5 * dphigrav[1];
     eta = star.eta[i-1] + 0.5 * deta[1];
     Phi = star.Phi[i-1] + 0.5 * dPhi[1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[2]   = rhs_X * dr;
     dPhi[2] = rhs_Phi * dr;
+    // dA[2]   = rhs_A * dr;
+    // dPsi0[2] = rhs_Psi0 * dr;
     dphigrav[2] = rhs_phigrav * dr;
     deta[2] = rhs_eta * dr;
 
     // 3rd RK step
     r   = star.r[i-1] + 0.5 * dr;
     X   = star.X[i-1] + 0.5 * dX[2];
+    // A   = star.A[i-1] + 0.5 * dA[2];
+    // Psi0   = star.Psi0[i-1] + 0.5 * dPsi0[2];
     A   = 0;
     Psi0 = 0;
+    // phigrav   = 0;
+    // eta = 0;
     phigrav   = star.phigrav[i-1] + 0.5 * dphigrav[2];
     eta = star.eta[i-1] + 0.5 * deta[2];
     Phi = star.Phi[i-1] + 0.5 * dPhi[2];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[3]   = rhs_X * dr;
     dPhi[3] = rhs_Phi * dr;
+    // dA[3]   = rhs_A * dr;
+    // dPsi0[3] = rhs_Psi0 * dr;
     dphigrav[3] = rhs_phigrav * dr;
     deta[3] = rhs_eta * dr;
 
     // 4th RK step
     r   = star.r[i];
     X   = star.X[i-1] + dX[3];
+    // A   = star.A[i] + dA[3];
+    // Psi0   = star.Psi0[i-1] + dPsi0[3];
     A   = 0;
     Psi0 = 0;
+    // phigrav = 0;
+    eta = 0;
     phigrav = star.phigrav[i-1] + dphigrav[3];
     eta = star.eta[i-1] + deta[3];
     Phi = star.Phi[i-1] + dPhi[3];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
     dX[4]   = rhs_X * dr;
     dPhi[4] = rhs_Phi * dr;
+    // dA[4]   = rhs_A * dr;
+    // dPsi0[4] = rhs_Psi0 * dr;
     dphigrav[4] = rhs_phigrav * dr;
     deta[4] = rhs_eta * dr;
 
@@ -1223,6 +1591,8 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     star.Psi0[i] = 0;
     star.A[i]   = star.A[i-1]   + (dA[1]  + 2*dA[2]  + 2*dA[3]  + dA[4] ) / 6.0;
     star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
+    // star.phigrav[i] = 0;
+    // star.eta[i]   = 0;
     star.phigrav[i] = star.phigrav[i-1]   + (dphigrav[1]  + 2*dphigrav[2]  + 2*dphigrav[3]  + dphigrav[4] ) / 6.0;
     star.eta[i]   = star.eta[i-1]   + (deta[1]  + 2*deta[2]  + 2*deta[3]  + deta[4] ) / 6.0;
     star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
@@ -1289,7 +1659,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
     }
   }
-
+  
   }
 
 /*==========================================================================*/
@@ -1433,7 +1803,6 @@ void readPars(char* ifil)
   par.phigrav0  = 0.0;
   par.omega0    = 1.;            // omega0 is always 1, it is not specified
   par.nzerotarget = 0;
-  par.conv_thresh = 1e-5;
   par.thresh    = 2e-16;
   par.mpercentage = 90;
   par.rmatchfac = 1;
@@ -1467,8 +1836,6 @@ void readPars(char* ifil)
         sscanf(line, "rmax %le", &(par.rmax));
       else if(strstr(line, "A0") != NULL)
         sscanf(line, "A0 %le", &(par.A0));
-      else if(strstr(line, "omega0") != NULL)
-        sscanf(line, "omega0 %le", &(par.omega0));
       else if(strstr(line, "mphigrav0") != NULL)
         sscanf(line, "mphigrav0 %le", &(par.mphigrav0));
       else if(strstr(line, "alpha0") != NULL)
@@ -1479,8 +1846,6 @@ void readPars(char* ifil)
         sscanf(line, "phigrav0 %le", &(par.phigrav0));
       else if(strstr(line, "nzerotarget") != NULL)
         sscanf(line, "nzerotarget %d", &(par.nzerotarget));
-      else if(strstr(line, "conv_thresh") != NULL)
-        sscanf(line, "conv_thresh %le", &(par.conv_thresh));
       else if(strstr(line, "thresh") != NULL)
         sscanf(line, "thresh %le", &(par.thresh));
       else if(strstr(line, "mpercentage") != NULL)
@@ -1513,13 +1878,11 @@ void printPars()
   printf("nint          = %d\n", par.nint);
   printf("rmax          = %g\n", par.rmax);
   printf("A0            = %g\n", par.A0);
-  printf("omega0        = %g\n", par.omega0);
   printf("mphigrav0     = %g\n", par.mphigrav0);
   printf("phigrav0      = %g\n", par.phigrav0);
   printf("alpha0        = %g\n", par.alpha0);
   printf("beta0         = %g\n", par.beta0);
   printf("nzerotarget   = %d\n", par.nzerotarget);
-  printf("conv_thresh   = %g\n", par.conv_thresh);
   printf("thresh        = %g\n", par.thresh);
   printf("mpercentage   = %g\n", par.mpercentage);
   printf("rmatchfac     = %g\n", par.rmatchfac);

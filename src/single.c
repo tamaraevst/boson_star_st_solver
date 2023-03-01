@@ -42,6 +42,7 @@ typedef struct param
   double        lambda6;
   double        lambda8;
   double        sigma0;
+  int           docheck;
   char          potential[LEN];
   char          minmax[LEN];
   } param;
@@ -75,9 +76,10 @@ double  F_st               (double);
 double  derF_st            (double);
 double  W_st               (double);
 double  derW_st            (double);
+void check_phigrav      (double);
 
 
-
+ 
 // Function pointers
 double  (*V)            (double);
 double  (*Vp)           (double);
@@ -167,6 +169,13 @@ int main(int argc, char* argv[])
         printf("Maximal compactness:   %g\n", CBS);
         calcIso();
 
+        if (par.docheck == 1)
+        {
+          //Check if \varphi does not cross not allowed values
+          for(i = 0; i < par.nint; i++)
+          {check_phigrav(star.phigrav[i]);}
+        }
+        
         printf("I get the following difference, %22.16g\n", fabs(criterion));
         break;
       }
@@ -190,6 +199,7 @@ int main(int argc, char* argv[])
         par.phigrav0 -= (1e-05 + criterion/criterion_derivative);
            }
   }
+
   // IO
   out1D(star.r, star.X, 0, par.nint-1, "X.dat");
   out1D(star.r, star.phigrav, 0, par.nint-1, "phigrav.dat");
@@ -935,6 +945,7 @@ void readPars(char* ifil)
   par.lambda6   = 0;
   par.lambda8   = 0;
   par.sigma0    = 1;
+  par.docheck   = 1;
   strcpy(par.minmax, "min");
 
 
@@ -988,6 +999,8 @@ void readPars(char* ifil)
         sscanf(line, "lambda8 %le", &(par.lambda8));
       else if(strstr(line, "sigma0") != NULL)
         sscanf(line, "sigma0 %le", &(par.sigma0));
+      else if(strstr(line, "docheck") != NULL)
+        sscanf(line, "docheck %d", &(par.docheck));
       }
     }
 
@@ -1007,6 +1020,7 @@ void printPars()
   printf("alpha0        = %g\n", par.alpha0);
   printf("beta0         = %g\n", par.beta0);
   printf("nzerotarget   = %d\n", par.nzerotarget);
+  printf("docheck        = %d\n", par.docheck);
   printf("thresh        = %g\n", par.thresh);
   printf("mpercentage   = %g\n", par.mpercentage);
   printf("rmatchfac     = %g\n", par.rmatchfac);
@@ -1293,3 +1307,18 @@ double findMax(double* f, int n1, int n2)
   }
 
 /*==========================================================================*/
+
+void check_phigrav(double entry)
+{
+  double ratio = - par.alpha0/par.beta0;
+  if (fabs(entry - ratio) < 1e-8)
+  {
+    printf("Not allowed to cross -a0/b0 line! Exiting... \n");
+    exit(0);
+  }
+  else {return;}
+}
+
+/*==========================================================================*/
+
+
