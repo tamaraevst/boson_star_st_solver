@@ -77,6 +77,7 @@ double  F_st               (double);
 double  derF_st            (double);
 double  W_st               (double);
 double  derW_st            (double);
+void check_phigrav      ();
 
 
 
@@ -172,6 +173,9 @@ int main(int argc, char* argv[])
 
     if (fabs(criterion) < par.conv_thresh && converged != 0)
       {
+        //Check if \varphi does not cross not allowed values
+        check_phigrav(star.phigrav[i]);
+
         rBS  = calcRadius();
         mBS  = star.m[par.nint-1];
         omBS = par.omega0;
@@ -607,10 +611,9 @@ int calcExtAsym()
     c3 = star.phigrav[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
     c4 = star.eta[imatchgrav] * pow(r, 1 + delta) * exp(r * mphigrav);
 
-    // printf("c1, c2 = %g   %g\n", c3, c4);
     printf("c3, c4 = %g   %g\n", c3, c4);
 
-    //Integrate outwards once again
+    // Integrate outwards once again
     for(i = imatchgrav+1; i < imatch; i++)
       {
       dr  = star.r[i] - star.r[i-1];
@@ -706,6 +709,7 @@ int calcExtAsym()
     c4 = star.eta[imatch] * pow(r, 1 + delta) * exp(r * mphigrav);
     
     printf("\nc1, c2 = %g   %g\n", c1, c2);
+    printf("c3, c4 = %g   %g\n", c3, c4);
 
     //Integrate outwards once again, match both scalar fields now
     for(i = imatch+1; i < par.nint; i++)
@@ -772,18 +776,21 @@ int calcExtAsym()
   }
 
     //Sanity check for NaNs
-    if (isnan(c1)|| isnan(c2) || isnan(c3) || isnan(c4) || isnan(star.Phi[par.nint]) || isnan(star.phigrav[par.nint-1]) || isnan(star.X[par.nint-1]))
+    if (isnan(c1)|| isnan(c2) || isnan(c3) || isnan(c4) || isnan(star.Phi[par.nint]) || isnan(star.phigrav[par.nint-1]) || isnan(star.X[par.nint-1]) || isnan(star.A[par.nint-1]))
     { if (isnan(star.Phi[par.nint]))
             {printf("Phi is nan on the grid boundary \n");}
       if (isnan(star.phigrav[par.nint-1]))
             {printf("Gravitational scalar field is nan on the grid boundary \n");}
       if (isnan(star.X[par.nint-1]))
             {printf("X is nan on the grid boundary \n");}
+      if (isnan(star.A[par.nint-1]))
+            {printf("A is nan on the grid boundary \n");}
       return 0;}
     else
-    { printf("I've matched the gravittaional scalar field at radius = %g \n", star.r[imatchgrav]);
+    { printf("I've matched the gravitational scalar field at radius = %g \n", star.r[imatchgrav]);
       printf("The value of the field at that point = %g \n", star.phigrav[imatchgrav]);
-      return imatchgrav;}
+      return imatchgrav;
+    }
   
   // Overwrite eta with the derivative of A?
   // This is introduces kinks in the eta profile and we do not use it.
@@ -894,7 +901,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
   *rstop = star.r[n1-1];
   *rstopgrav = star.r[n1-1];
   istop  = -1;   // So we have no vacuum region unless we exceed the amplitude
-
+  
   // Central values
   star.X[0]   = 1;
   star.A[0]   = A0;
@@ -1804,5 +1811,30 @@ double findMax(double* f, int n1, int n2)
 
   return val;
   }
+
+/*==========================================================================*/
+
+void check_phigrav()
+{
+  int i;
+
+  double ratio = - par.alpha0/par.beta0;
+
+  for (i = 0; i < par.nint; i++)
+  {
+    if (star.A[i] > star.A[0] * 1.5)
+    {
+      printf("The solution was non-smoothly matched! Exiting... \n");
+      exit(0);
+    }
+
+    if (fabs(star.phigrav[i] - ratio) < 1e-8)
+    {
+      printf("Not allowed to cross -a0/b0 line! Exiting... \n");
+      exit(0);
+    }
+  }
+
+}
 
 /*==========================================================================*/

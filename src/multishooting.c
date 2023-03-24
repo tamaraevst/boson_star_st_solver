@@ -64,7 +64,7 @@ double  findMax         (double*, int, int);
 void    intODE          (double, double, double, int*, double*, int*);
 int     iofr            (double);
 int     mygetline       (char*, FILE*);
-void    onemodel        (double*, double*, double*, double*);
+int    onemodel        (double*, double*, double*, double*);
 void    openFile        (const char*);
 void    out1D           (double*, double*, int, int, const char*);
 void    printPars       ();
@@ -73,7 +73,7 @@ void    registerPotential();
 void    rescalePhi      ();
 void    rhsBSint        (double*, double*, double*, double*, double*, double*, double, double, double, double, double, double, double, double);
 void    rhsIso          (double*, double, double, double, double);
-void    shoot           ();
+int    shoot           ();
 double  V_series        (double);
 double  Vp_series       (double);
 double  V_solitonic     (double);
@@ -82,6 +82,7 @@ double  F_st               (double);
 double  derF_st            (double);
 double  W_st               (double);
 double  derW_st            (double);
+int check_phigrav      (double);
 
 // Function pointers
 double  (*V)            (double);
@@ -103,6 +104,7 @@ model star;
 int main(int argc, char* argv[])
   {
   int i;
+  int success;
   double omBS, mBS, rBS, CBS, dA;
 
 
@@ -111,6 +113,8 @@ int main(int argc, char* argv[])
   // Parameters
   readPars(argv[1]);
   printPars();
+
+  double phigrav_init = par.phigrav0;
 
   // Register functions
   registerPotential();
@@ -140,10 +144,18 @@ int main(int argc, char* argv[])
   else dA = (par.Amax - par.Amin) / (par.nmodels - 1);
   for(i = 0; i < par.nmodels; i++)
     {
+    par.phigrav0 = phigrav_init;
     par.omega0 = 1;   // par.omega0 was overwritten with the last solution.
                       // Now we want to reinitialize it for the next model.
+    
     par.A0 = par.Amin + dA * i;
-    onemodel(&omBS, &mBS, &rBS, &CBS);
+    success = onemodel(&omBS, &mBS, &rBS, &CBS);
+    if (success==0)
+    {
+      printf("No solution found for %11.6g\n", par.A0);
+    }
+    else
+    {
     printf("%11.6g  %11.6g   %16.10g   %16.10g   %12.6g   %12.6g\n",
            par.A0, par.phigrav0, omBS, mBS, rBS, CBS);
     append2Data("MofR.dat", rBS, mBS);
@@ -152,6 +164,7 @@ int main(int argc, char* argv[])
     double alpha0 = exp(star.Phi[0])/sqrt(F(star.phigrav[0]));
     append4Data("AuxiliaryInfo.dat", omBS, alpha0, par.phigrav0, par.A0);
     }
+    }
 
 
   printf("===============================================================================\n");
@@ -159,11 +172,12 @@ int main(int argc, char* argv[])
 
 /*==========================================================================*/
 
-void onemodel(double* omBS, double* mBS, double* rBS, double* CBS)
+int onemodel(double* omBS, double* mBS, double* rBS, double* CBS)
   {
-  int k;
-  int converged;
-  for (k = 0; k < 1000; ++k)
+  int k, i;
+  int converged, success, check_solution;
+
+  for (k = 0; k < 51; ++k)
   { 
     if (par.verbose)
     {
@@ -172,10 +186,20 @@ void onemodel(double* omBS, double* mBS, double* rBS, double* CBS)
     }
 
     // Shoot
-    shoot();
+    success = shoot();
+    if (k == 49 && success == 0)
+    { 
+      printf("Shooting failed for this central boson amplitude, I could not find omin and omax values!\n");
+      return 0;
+     }
+    else
+    {
     // Calculate exterior
     converged = calcExtAsym();
-      
+
+    if (converged == 0)
+    {par.phigrav0 -= 0.0001;}
+
     // Rescale the time-time component of the metric such that it
     // corresponds to a Schwarzschild exterior.
     rescalePhi();
@@ -195,8 +219,23 @@ void onemodel(double* omBS, double* mBS, double* rBS, double* CBS)
     printf("Gravitational scalar field at the surface boundary condition:   %g\n", star.phigrav[jj]);
     }
 
-    if (fabs(criterion) < 1e-05)
+    if (converged == 0 && k == 49)
+    { 
+      printf("I've reached max number of iterations searching for a solution and have not converged\n");
+      return 0;
+    }
+
+    if (fabs(criterion) < 1e-06 && converged == 1)
       {
+        for(i = 0; i < par.nint; i++)
+        {
+          check_solution = check_phigrav(star.phigrav[i]);
+          if (check_solution == 0)
+          { 
+            printf("Rejecting solution since it crosses -alpha0/beta0 line!\n");
+            return 0;
+          }
+        }
         // Compute diagnostic quantities and transform to isotropic coordinates.
         calcMass();
 
@@ -214,23 +253,32 @@ void onemodel(double* omBS, double* mBS, double* rBS, double* CBS)
       else {
         if (par.verbose)
         {printf("I get the following difference, %22.16g\n", fabs(criterion));}
-
         par.phigrav0 += 1e-05;
 
         // Calculate the model all over again
         shoot();
         converged = calcExtAsym();
-        rescalePhi();
 
-        double sqrt_expr_v2 = sqrt(derivative_term * derivative_term + star.X[jj] * star.X[jj] * star.eta[jj] * star.eta[jj]);
-        double varphi_surface_v2 = 0.0 - (star.X[jj] * star.eta[jj]) / sqrt_expr_v2
-                           * atanh( sqrt_expr_v2 / (derivative_term + 1 / star.r[jj]));
-        double criterion_v2 = star.phigrav[jj] - varphi_surface_v2;
+        // if (converged == 0) 
+        // {
+        //   printf("Did not find a solution for this central boson amplitude!\n");
+        //   break;
+        // }
 
-        double criterion_derivative = (criterion_v2 - criterion) / (1e-05);
-    
-        par.phigrav0 -= (1e-05 + criterion/criterion_derivative);
-           }
+        // else
+        // {
+          rescalePhi();
+
+          double sqrt_expr_v2 = sqrt(derivative_term * derivative_term + star.X[jj] * star.X[jj] * star.eta[jj] * star.eta[jj]);
+          double varphi_surface_v2 = 0.0 - (star.X[jj] * star.eta[jj]) / sqrt_expr_v2
+                            * atanh( sqrt_expr_v2 / (derivative_term + 1 / star.r[jj]));
+          double criterion_v2 = star.phigrav[jj] - varphi_surface_v2;
+
+          double criterion_derivative = (criterion_v2 - criterion) / (1e-05);
+      
+          par.phigrav0 -= (1e-05 + criterion/criterion_derivative);
+            }
+        }
   }
 
   if(par.verbose)
@@ -240,11 +288,13 @@ void onemodel(double* omBS, double* mBS, double* rBS, double* CBS)
     printf("Total mass:           m     = %22.16g\n", star.m[par.nint-1]);
     printf("===================================================\n");
     }
+
+  return 1;
   }
 
 /*==========================================================================*/
 
-void shoot()
+int shoot()
   {
   int    nzero, oldnzero;
   double omcur;
@@ -271,8 +321,14 @@ void shoot()
   //     search fail, we quit.
   success = findFreqMinMax(&ommin, &ommax);
   if(success == 0)
-    { printf("Could not find ommin and ommax in shoot\n"); exit(0); }
-  else if(par.verbose)
+    { 
+      if (par.verbose)
+      {printf("Could not find ommin and ommax in shoot\n");}
+      return 0;
+    }
+  else
+  {
+  if(par.verbose)
     printf("Using   omega in   [%22.16g,   %22.16g]\n", ommin, ommax);
 
 
@@ -314,6 +370,8 @@ void shoot()
   // nzero zero crossings whereas ommax has one zero crossing more.
   // We store this frequency in the parameter omega0 for further use.
   par.omega0 = ommin;
+  return 1;
+  }
   }
 
 /*==========================================================================*/
@@ -336,7 +394,7 @@ int  findFreqMinMax(double* ommin, double* ommax)
   // two omega0 values are the brackets.
   // If the resulting n<=ntarget, we double omega0 until we have
   // n > ntarget and the ensuing omega0 values are our brackets.
-  par.omega0 = 1;
+
   intODE(par.A0, par.phigrav0, par.omega0, &nzero, &rstop, &sigA);
   if(par.verbose)
     printf("%15.10g          %d          %15.7g           %d\n",
@@ -1116,10 +1174,13 @@ int calcExtAsym()
   //Sanity check for NaNs
   if (isnan(c1)|| isnan(c2) || isnan(c3) || isnan(c4) || isnan(star.Phi[par.nint]) || isnan(star.phigrav[par.nint-1]) || isnan(star.X[par.nint]))
   { if (isnan(star.Phi[par.nint]))
+          if (par.verbose)
           {printf("Phi is nan on the grid boundary \n");}
     if (isnan(star.phigrav[par.nint-1]))
+          if (par.verbose)
           {printf("Gravitational scalar field is nan on the grid boundary \n");}
     if (isnan(star.X[par.nint]))
+          if (par.verbose)
           {printf("X is nan on the grid boundary \n");}
     return 0;}
   else
@@ -1429,5 +1490,15 @@ double findMax(double* f, int n1, int n2)
 
   return val;
   }
+
+/*==========================================================================*/
+
+int check_phigrav(double entry)
+{
+  double ratio = - par.alpha0/par.beta0;
+  if (fabs(entry - ratio) < 1e-8)
+  {return 0;}
+  else {return 1;}
+}
 
 /*==========================================================================*/

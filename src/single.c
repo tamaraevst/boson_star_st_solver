@@ -541,7 +541,6 @@ int  findFreqMinMax(double* ommin, double* ommax)
   // two omega0 values are the brackets.
   // If the resulting n<=ntarget, we double omega0 until we have
   // n > ntarget and the ensuing omega0 values are our brackets.
-  printf("Evaluating the ODE for the first time \n");
 
   intODE(par.A0, par.phigrav0, par.omega0, &nzero, &rstop, &sigA);
   printf("%15.10g          %d          %15.7g           %d\n",
