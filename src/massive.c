@@ -1,3 +1,7 @@
+/*
+Complete routine for finding solutions for the massive case of BSs in ST theory.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -77,6 +81,8 @@ double  F_st               (double);
 double  derF_st            (double);
 double  W_st               (double);
 double  derW_st            (double);
+double alpha            (double);
+double dFoverF          (double, double , double);
 void check_phigrav      ();
 
 
@@ -903,7 +909,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
   istop  = -1;   // So we have no vacuum region unless we exceed the amplitude
   
   // Central values
-  star.X[0]   = 1;
+  star.X[0]   = 1/sqrt(F(phigrav0));
   star.A[0]   = A0;
   star.phigrav[0]   = phigrav0;
   star.Psi0[0]   = 0;
@@ -1003,7 +1009,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     if(star.A[i] * star.A[i-1] < 0) (*nzero)++;   // Zero crossing found
 
     //Do the same inspection for \phigrav!
-    if(fabs(star.phigrav[i]) > 2*star.phigrav[5000] || star.phigrav[i] != star.phigrav[i])
+    if(fabs(star.phigrav[i]) > 4*star.phigrav[5000] || star.phigrav[i] != star.phigrav[i])
       {
         phigravstop = i - 1;   // We stop the integration; one point as sanity buffer
       }
@@ -1039,9 +1045,9 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     eta = 0;
     Phi = star.Phi[i-1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[1]   = rhs_A * dr;
+    dX[1]   = rhs_X * dr;
     dPsi0[1] = rhs_Psi0 * dr;
-    dA[1]   = rhs_X * dr;
+    dA[1]   = rhs_A * dr;
     dPhi[1] = rhs_Phi * dr;
 
     // 2nd RK step
@@ -1110,7 +1116,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     eta = 0;
     Phi = star.Phi[i-1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[1]   = rhs_A * dr;
+    dX[1]   = rhs_X * dr;
     dPhi[1] = rhs_Phi * dr;
 
     // 2nd RK step
@@ -1159,7 +1165,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     }
   }
 
-   if (istop > phigravstop)
+  if (istop > phigravstop)
   {
   for(i = istop; i < phigravstop; i++)
     {
@@ -1172,12 +1178,11 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     Psi0   = star.Psi0[i-1];
     A   = 0;
     Psi0 = 0;
-
     phigrav = star.phigrav[i-1];
     eta = star.eta[i-1];
     Phi = star.Phi[i-1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[1]   = rhs_A * dr;
+    dX[1]   = rhs_X * dr;
     dPhi[1] = rhs_Phi * dr;
     dphigrav[1] = rhs_phigrav * dr;
     deta[1] = rhs_eta * dr;
@@ -1228,8 +1233,6 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     star.X[i]   = star.X[i-1]   + (dX[1]  + 2*dX[2]  + 2*dX[3]  + dX[4] ) / 6.0;
     star.A[i]   = 0;
     star.Psi0[i] = 0;
-    star.A[i]   = star.A[i-1]   + (dA[1]  + 2*dA[2]  + 2*dA[3]  + dA[4] ) / 6.0;
-    star.Psi0[i] = star.Psi0[i-1] + (dPsi0[1]+ 2*dPsi0[2]+ 2*dPsi0[3]+dPsi0[4]) / 6.0;
     star.phigrav[i] = star.phigrav[i-1]   + (dphigrav[1]  + 2*dphigrav[2]  + 2*dphigrav[3]  + dphigrav[4] ) / 6.0;
     star.eta[i]   = star.eta[i-1]   + (deta[1]  + 2*deta[2]  + 2*deta[3]  + deta[4] ) / 6.0;
     star.Phi[i] = star.Phi[i-1] + (dPhi[1]+ 2*dPhi[2]+ 2*dPhi[3]+dPhi[4]) / 6.0;
@@ -1248,7 +1251,7 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
     eta = 0;
     Phi = star.Phi[i-1];
     rhsBSint(&rhs_X, &rhs_A, &rhs_eta, &rhs_Phi, &rhs_phigrav, &rhs_Psi0, r, X, A, eta, Phi, phigrav, Psi0, om);
-    dX[1]   = rhs_A * dr;
+    dX[1]   = rhs_X * dr;
     dPhi[1] = rhs_Phi * dr;
 
     // 2nd RK step
@@ -1331,15 +1334,7 @@ void rhsBSint(double* rhs_X, double* rhs_A, double* rhs_eta, double* rhs_Phi, do
     *rhs_A = Psi0;
     *rhs_eta = - eta * ((*rhs_Phi) - 0.5 * derF(phigrav) * X * eta) - 2 * eta / r + F(phigrav) * X * derW(phigrav) + 
                 + 2*PI * X * derF(phigrav) * (1/F(phigrav)) * (om*om * exp(-2*Phi) * A*A * F(phigrav) - Psi0*Psi0 / (X*X) - 2*V(A));
-    *rhs_Psi0 = -2 * Psi0 * (1/r) + Psi0 * ((*rhs_X)/X + 1.5 * derF(phigrav) * X * eta - (*rhs_Phi)) - (X*X) * (om*om) * A * exp(-2*Phi) + (X*X) * A * Vp(A);
-
-
-    // *rhs_eta = -2 * eta / r + r * eta * F(phigrav) * (X*X) * W(phigrav) - 0.5 * eta * (F(phigrav) * (X*X) - 1) / r + F(phigrav) * X * derW(phigrav) + 
-    //             + PI * X * derF(phigrav) * (1/F(phigrav)) * (om*om * exp(-2*Phi) * A*A * F(phigrav) - 2*V(A) - Psi0*Psi0 / (X*X)) - 0.5 * X*X * eta*eta*eta * r + 0.5 * eta * derF(phigrav)
-    //             - 2*PI * r * eta * X*X * (1/F(phigrav)) * (Psi0*Psi0 / (X*X)
-    //            + om*om * exp(-2*Phi) * A*A * F(phigrav) - V(A));
-    // *rhs_Psi0 = -2 * Psi0 * (1/r) - Psi0 * (F(phigrav) * (X*X) - 1) / r + 2 * r * Psi0 * F(phigrav) * (X*X) * W(phigrav) + 
-    //             + 4*PI * r * Psi0 * X*X * (1/F(phigrav)) * V(A) + Psi0 * X * eta * derF(phigrav) - (X*X) * (om*om) * A * exp(-2*Phi) + (X*X) * A * Vp(A);
+    *rhs_Psi0 = -2 * Psi0 * (1/r) + Psi0 * ((*rhs_X)/X + 1.5 * derF(phigrav) * X * eta - (*rhs_Phi)) - (X*X) * (om*om) * A * exp(-2*Phi) * F(phigrav) + (X*X) * A * Vp(A);
     }
   }
 
@@ -1393,6 +1388,26 @@ double derF_st(double phigrav)
   // Function F_{,\varphi} / F
   return -2 * par.alpha0 - 2 * par.beta0 * phigrav;
   }
+
+/*=====================================================================*/
+
+double alpha(double phigrav)
+{
+  double  result;
+		
+	result = exp(phigrav)/sqrt(F(phigrav));
+	return result;
+}
+
+/*=====================================================================*/
+
+double dFoverF(double phigrav, double X, double eta)
+{
+  double  result;
+		
+	result = derF(phigrav) * X * eta;
+	return result;
+}
 
 /*==========================================================================*/
 
