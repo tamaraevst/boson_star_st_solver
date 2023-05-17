@@ -244,9 +244,11 @@ void shoot()
   double rstop;
 
   if (par.verbose)
-  {printf("\n");
-  printf("omega               Zero crossings            Rstop          sigA\n");
-  printf("=================================================================\n");}
+  {
+    printf("\n");
+    printf("omega               Zero crossings            Rstop          sigA\n");
+    printf("=================================================================\n");
+  }
 
   // printf("I'm setting up the grid \n");
   // Grid setup
@@ -268,9 +270,11 @@ void shoot()
   //     threshold between nzerotarget and nzerotarget+1. This is the
   //     model we seek with nzerotarget zero crossings.
   if (par.verbose)
-  {printf("\n");
-  printf("omega               Zero crossings            Rstop          sigA\n");
-  printf("=================================================================\n");}
+  {
+    printf("\n");
+    printf("omega               Zero crossings            Rstop          sigA\n");
+    printf("=================================================================\n");
+  }
 
   cnt = 0;
   while( (ommax - ommin) > par.thresh )
@@ -327,7 +331,7 @@ int calcExtAsym()
   intODE(par.A0, par.phigrav0, par.omega0, &nzero, &rstop, &sigA);
   if (par.verbose)
   {
-      printf("-----------------------------------------------------------------------\n");
+    printf("-----------------------------------------------------------------------\n");
     printf("%22.16g          %d          %15.7g           %d\n",
          par.omega0, nzero, rstop, sigA);
     printf("-----------------------------------------------------------------------\n");
@@ -979,6 +983,8 @@ void readPars(char* ifil)
         sscanf(line, "sigma0 %le", &(par.sigma0));
       else if(strstr(line, "docheck") != NULL)
         sscanf(line, "docheck %d", &(par.docheck));
+      else if(strstr(line, "verbose") != NULL)
+        sscanf(line, "verbose %d", &(par.verbose));
       }
     }
 
