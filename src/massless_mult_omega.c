@@ -1,6 +1,6 @@
 /*
-Complete routine for finding BS families of solutions for the massless scalar-tensor theory with Damour-Esposito-Farese coupling function. 
-Here we assume the control parameter is the BS amplitude. The control parameter can be easily changed to be the frequency if desired.
+Complete routine for finding BS families of solutions for the massless scalar-tensor theory. 
+Here we assume the control parameter is the BS amplitude. 
 The code increments the given range for the amplitude and for each one of them computes a solution.
 */
 
@@ -35,6 +35,7 @@ typedef struct model
   double        *absphigrav;
   } model;
 
+
 typedef struct param
   {
   double        rmax;
@@ -61,6 +62,7 @@ typedef struct param
   char          potential[LEN];
   char          minmax[LEN];
   } param;
+
 
 // Functions
 void    append2Data     (const char*, double, double);
@@ -105,6 +107,7 @@ double  derW_st            (double);
 void    integrandN        (double*, double, double, double, double, double, double);
 void    calculateN      (double);
 void    check_phigrav      (double);
+void    out_old_solution    (double, const char*);
 
 // Numerical Recipes functions
 double  **dmatrix       (long, long, long, long);
@@ -122,6 +125,7 @@ double  (*W)            (double);
 double  (*derW)           (double);
 double  (*F)            (double);
 double  (*derF)           (double);
+
 
 // Global variables
 const double PI = 3.1415926535897932385;
@@ -184,9 +188,8 @@ int main(int argc, char* argv[])
   for(i = 0; i < par.nmodels; i++)
     {
     
-    par.A0 = par.Amin + dA * i;
+    par.A0 = par.Amax - dA * i;
 
-    // Compute model
     success = onemodel(&nzero, &rBS, &rBSE, &omBS, &mBS, &CBS, &phigravmax, &omegaini);
     if (success==0)
     {
@@ -198,7 +201,6 @@ int main(int argc, char* argv[])
       printf("%11.6g  %11.6g   %16.10g   %16.10g   %12.6g   %12.6g     %d   %12.6g\n",
            par.A0, par.phigrav0, omBS, mBS, rBS, CBS, nzero, phigravmax);
 
-      // Save various profiles as function of areal radius to file
       append2Data("MofR.dat", rBS, mBS);
       append2Data("MofA.dat", par.A0, mBS);
       append2Data("Aofomega.dat", par.A0, omBS);
@@ -212,10 +214,6 @@ int main(int argc, char* argv[])
   }
 
 /*==========================================================================*/
-/*
-Function for computing a BS model using Newton-Raphson scheme on (\omega, \varphi_c) variables. Until a desired threshold is reached, 
-the algorithm keeps on iterating/shooting for the BS frequency and the central gravitational scalar field.
-*/
 
 int onemodel(int* nzero, double* rBS, double* rBSE, double* omBS, double* mBS, double* CBS, double* phigravmax, double* omega_init)
   {
@@ -223,6 +221,9 @@ int onemodel(int* nzero, double* rBS, double* rBSE, double* omBS, double* mBS, d
   int i, k;
   int converged;
   double criterion_derivative, criterion_derivative_A;
+
+  // Shoot
+  // shoot();
 
   for (k = 0; k < 1001; ++k)
   { 
@@ -254,9 +255,7 @@ int onemodel(int* nzero, double* rBS, double* rBSE, double* omBS, double* mBS, d
     printf("The matching difference for the gravitational scalar field ...%g\n", criterion);
     printf("The matching difference for the bosonic scalar field ... %g\n", criterion_A);
 
-    //Specify thresholds here for when the solution is regarded to be found. Note that for thin-shell like models one may require 
-    //the threshold for the bosonic scalar field to be (criterion_A) ~ 1e-6.
-    if (fabs(criterion_A) < 1e-7 && fabs(criterion) < 1e-4)
+    if (fabs(criterion_A) < 1e-7 && fabs(criterion) < 1e-04)
     {
       *omega_init = par.omega0;
 
@@ -267,7 +266,6 @@ int onemodel(int* nzero, double* rBS, double* rBSE, double* omBS, double* mBS, d
               printf("I get the following difference for the bosonic scalar field, %22.16g\n", fabs(criterion_A));
               printf("--------------------------------------------------------------------------------------------------\n");
             }
-          //Compute physical diagnistics of the BS model found
           calculate_model(rBS, rBSE, omBS, mBS, CBS, phigravmax);
 
           *nzero = 0;
@@ -321,16 +319,12 @@ int onemodel(int* nzero, double* rBS, double* rBSE, double* omBS, double* mBS, d
     J[1][2] = (criterion_A - F[1][1]) / 1e-14;
     J[2][2] = (criterion   - F[1][2]) / 1e-14;
 
-    //Sanity checks
     debuginfo_FJ(F, J);
 
-    //Perform Gaussian elimination
     gaussj(J, 2, F, 1);
 
-    //Sanity check again
     debuginfo_FJ(F, J);
 
-    //Update guesses
     par.omega0 -= F[1][1];
     par.phigrav0 -= F[1][2];
 
@@ -339,9 +333,6 @@ int onemodel(int* nzero, double* rBS, double* rBSE, double* omBS, double* mBS, d
 }
 
 /*==========================================================================*/
-/*
-Function for computing diagnostics of a BS model
-*/
 
 void calculate_model(double* rBS, double* rBSE, double* omBS, double* mBS, double* CBS, double* phigravmax)
 {
@@ -360,18 +351,18 @@ void calculate_model(double* rBS, double* rBSE, double* omBS, double* mBS, doubl
   calcMass();
   calcMassEinstein();
 
-  *rBS  = calc99RadiusJordan(); //Jordan radius
-  *rBSE  = calc99RadiusEinstein(); //Einstein radius
+  *rBS  = calc99RadiusJordan();
+  *rBSE  = calc99RadiusEinstein();
   *mBS  = star.m[par.nint-1];
   mBSE  = star.mE[par.nint-1];
-  *CBS  = findMax(star.C, 0, par.nint-1); //BS compactness
+  *CBS  = findMax(star.C, 0, par.nint-1);
 
   for (i = 0; i < par.nint; ++i)
   {
     star.absphigrav[i] = fabs(star.phigrav[i]);
   }
 
-  *phigravmax = findMax(star.absphigrav, 0, par.nint-1); //Maximum of gravitational scalar field
+  *phigravmax = findMax(star.absphigrav, 0, par.nint-1);
   
   // if (par.verbose) {printf("Maximal compactness:   %g\n", CBS);}
 
@@ -384,10 +375,6 @@ void calculate_model(double* rBS, double* rBSE, double* omBS, double* mBS, doubl
 }
 
 /*==========================================================================*/
-/*
-Function for gluing the asymptotics to the outward integrated BS solution. This ensures the BS solution has the appropriate
-fall-off and mitigates exponentially growing modes.
-*/
 
 int calcExtAsym(double omega, double phigrav_guess)
   {
@@ -396,15 +383,14 @@ int calcExtAsym(double omega, double phigrav_guess)
   double r, X, Phi, A, eta, Psi0, phigrav, rhs_X, rhs_Phi, rhs_A, rhs_phigrav, rhs_Psi0, rhs_eta, om, mphigrav, dr;
   double dX[5], deta[5], dphigrav[5], dPhi[5], dA[5], dPsi0[5];
 
+
   // At this stage we have the correct frequency from the shooting
   // algorithm. Here we will compute this model and also remove
   // the diverging part in the profile and replace it with a smooth
   // exterior. Note that we are not yet rescaling time and frequency
   // yet, since we will need the complete profile with exterior to do
   // that.
-
   intODE(par.A0, phigrav_guess, omega, &nzero, &rstop, &sigA);
-
   // if (par.verbose)
   // {
   //   printf("-----------------------------------------------------------------------\n");
@@ -574,10 +560,6 @@ int calcExtAsym(double omega, double phigrav_guess)
   }
 
 /*==========================================================================*/
-/*
-Matching criterion for the bosonic scalar field. This is a simple 'smothness' experssion derived from asymptotic expression 
-of the bosonic scalar field and its derivative. 
-*/
 
 double calculate_criterion_A(int index, double omega)
 {
@@ -597,9 +579,6 @@ double calculate_criterion_A(int index, double omega)
 }
 
 /*==========================================================================*/
-/*
-Matching criterion for the gravitational scalar field
-*/
 
 double calculate_criterion_phigrav(int index, double omega0)
 {
@@ -615,14 +594,13 @@ double calculate_criterion_phigrav(int index, double omega0)
 }
 
 /*==========================================================================*/
-/*
-Find largest index i such that r[i] < rtarget.
-*/
 
 int iofr(double rtarget)
   {
   int i;
 
+
+  // Find largest index i such that r[i] < rtarget.
   i = 0;
   for(i = 1; i < par.nint; i++)
     if(star.r[i-1] <= rtarget && star.r[i] > rtarget) break;
@@ -634,9 +612,6 @@ int iofr(double rtarget)
   }
 
 /*==========================================================================*/
-/*
-Infrastructure for outward integration using RK4.
-*/
 
 void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop, int* sigAstop)
   {
@@ -836,9 +811,6 @@ void intODE(double A0, double phigrav0, double omega, int* nzero, double* rstop,
   }
 
 /*==========================================================================*/
-/*
-Partial differential equations to be solved for.
-*/
 
 void rhsBSint(double* rhs_X, double* rhs_A, double* rhs_eta, double* rhs_Phi, double* rhs_phigrav, double* rhs_Psi0,
               double r, double X, double A, double eta, double Phi, double phigrav, double Psi0, double om)
@@ -876,10 +848,6 @@ void rhsBSint(double* rhs_X, double* rhs_A, double* rhs_eta, double* rhs_Phi, do
   }
 
 /*==========================================================================*/
-/*
-General expression for the bosonic potential inclusing self-interaction terms (i.e. V(A)).
-*/
-
 double V_series(double A)
   {
   // Potential function
@@ -888,9 +856,6 @@ double V_series(double A)
   }
 
 /*==========================================================================*/
-/*
-Derivative of the bosonic potential w.r.t A^2, i.e. dV/dA^2.
-*/
 
 double Vp_series(double A)
   {
@@ -900,9 +865,6 @@ double Vp_series(double A)
   }
 
 /*==========================================================================*/
-/*
-Solitonic potential.
-*/
 
 double V_solitonic(double A)
   {
@@ -912,9 +874,6 @@ double V_solitonic(double A)
   }
 
 /*==========================================================================*/
-/*
-Derivative of the solitonic potential, dV/dA^2.
-*/
 
 double Vp_solitonic(double A)
   {
@@ -924,9 +883,6 @@ double Vp_solitonic(double A)
   }
 
 /*==========================================================================*/
-/*
-Damour-Esposito-Farese coupling function, i.e. F(\varphi).
-*/
 
 double F_st(double phigrav)
   {
@@ -935,9 +891,6 @@ double F_st(double phigrav)
   }
 
 /*==========================================================================*/
-/*
-Derivative of the coupling function, i.e. F_{,\varphi} / F.
-*/
 
 double derF_st(double phigrav)
   {
@@ -946,9 +899,6 @@ double derF_st(double phigrav)
   }
 
 /*==========================================================================*/
-/*
-Gravitational scalar potential (simple quadtratic form).
-*/
 
 double W_st(double phigrav)
   {
@@ -957,19 +907,14 @@ double W_st(double phigrav)
   }
 
 /*==========================================================================*/
-/*
-Derivative of the gravitational scalar potential.
-*/
 
 double derW_st(double phigrav)
   {
+  // Derivative of the potential for the gravitational scalar field
   return par.mphigrav0 * par.mphigrav0 * phigrav;
   }
 
 /*==========================================================================*/
-/*
-Initialisation of the grid.
-*/
 
 void initGrid(int n, double rmax)
   {
@@ -981,9 +926,6 @@ void initGrid(int n, double rmax)
   }
 
 /*==========================================================================*/
-/*
-Integrand of the Noether charge.
-*/
 
 void integrandN(double *rhs_q, double r, double A, double omega, double X, double phigrav, double Phi)
   {
@@ -996,9 +938,6 @@ void integrandN(double *rhs_q, double r, double A, double omega, double X, doubl
   }
 
 /*==========================================================================*/
-/*
-Integration of Noether charge using RK4.
-*/
 
 void calculateN(double omega)
   {
@@ -1042,9 +981,6 @@ void calculateN(double omega)
   }
 
 /*==========================================================================*/
-/*
-Function for reading the parameter file.
-*/
 
 void readPars(char* ifil)
   {
@@ -1061,7 +997,7 @@ void readPars(char* ifil)
   par.beta0     = 0.0;
   par.phigrav0  = 0.0;
   par.nmodels   = 1;
-  par.omega0    = 1.;            
+  par.omega0    = 1.;            // omega0 is always 1, it is not specified
   par.nzerotarget = 0;
   par.thresh    = 2e-16;
   par.mpercentage = 90;
@@ -1143,9 +1079,6 @@ void readPars(char* ifil)
   }
 
 /*==========================================================================*/
-/*
-Print statements of the parameters read from the file, as a sanity check.
-*/
 
 void printPars()
   {
@@ -1181,9 +1114,6 @@ void printPars()
   }
 
 /*==========================================================================*/
-/*
-What potential function did the user prefer to use.
-*/
 
 void registerPotential()
   {
@@ -1210,9 +1140,6 @@ void registerPotential()
   }
 
 /*==========================================================================*/
-/*
-Useful I/O stuff.
-*/
 
 int mygetline( char *s, FILE *ifp )
   {
@@ -1229,9 +1156,6 @@ int mygetline( char *s, FILE *ifp )
   }
 
 /*==========================================================================*/
-/*
-Function to rescale the BS frequency to the physical one using the lapse function.
-*/
 
 double rescalePhi(double omega0)
   {
@@ -1266,9 +1190,7 @@ double rescalePhi(double omega0)
   }
 
 /*==========================================================================*/
-/*
-Calculate the ADM mass of the BS model in the Jordan frame.
-*/
+
 void calcMass()
   {
   int i;
@@ -1290,9 +1212,7 @@ void calcMass()
   }
 
 /*==========================================================================*/
-/*
-Calculate the ADM mass of the BS model in the Einstein frame.
-*/
+
 void calcMassEinstein()
   {
   int i;
@@ -1309,9 +1229,7 @@ void calcMassEinstein()
   }
 
 /*==========================================================================*/
-/*
-Calculate the Jordan radius.
-*/
+
 void calcRJordan()
   {
   int   i;
@@ -1324,9 +1242,7 @@ void calcRJordan()
   }
 
 /*==========================================================================*/
-/*
-Calculate the radius of the BS model in the Jordan frame.
-*/
+
 double calc99RadiusJordan()
   {
   int n1, i;
@@ -1349,9 +1265,7 @@ double calc99RadiusJordan()
   }
 
 /*==========================================================================*/
-/*
-Calculate the radius of the BS model in the Einstein frame.
-*/
+
 double calc99RadiusEinstein()
   {
   int n1, i;
@@ -1374,9 +1288,7 @@ double calc99RadiusEinstein()
   }
 
 /*==========================================================================*/
-/*
-Find the index of the radius in an array.
-*/
+
 int calcRadius_index()
   {
   int n1, i;
@@ -1391,14 +1303,13 @@ int calcRadius_index()
   }
 
 /*==========================================================================*/
-/*
-Convert to isotropic gauge.
-*/
+
 void calcIso()
   {
   int i, n1;
   double dr, r, R, phigrav, X, f, rhs_f, df[5];
   double m, Rfac;
+
 
   n1 = par.nint;
 
@@ -1447,6 +1358,7 @@ void calcIso()
     star.psi[i] = 1 / sqrt(star.f[i] * sqrt(F(star.phigrav[i])));
     }
 
+
   // So far our solution is only determined up to an overall constant
   // factor, i.e. c*R is also a solution. We have fixed that by
   // requiring that at r->0, R=r. But ultimately, we would rather
@@ -1480,9 +1392,7 @@ void calcIso()
   }
 
 /*==========================================================================*/
-/*
-RHS equation for f in isotropic gauge.
-*/
+
 void rhsIso(double* rhs_f, double r, double phigrav, double X, double f)
   {
   if(r < 1.0e-15)
@@ -1499,9 +1409,7 @@ void rhsIso(double* rhs_f, double r, double phigrav, double X, double f)
   }
 
 /*==========================================================================*/
-/*
-Simple file with 3 columns
-*/
+
 void out1D(double* x, double* xx, double* y, int n1, int n2, const char* ofil)
   {
   int i;
@@ -1520,9 +1428,7 @@ void out1D(double* x, double* xx, double* y, int n1, int n2, const char* ofil)
   }
 
 /*==========================================================================*/
-/*
-Routine for opening the file for writing.
-*/
+
 void openFile(const char* ofil)
   {
   FILE* ofp;
@@ -1538,9 +1444,7 @@ void openFile(const char* ofil)
   }
 
 /*==========================================================================*/
-/*
-Simple file with 2 columns
-*/
+
 void append2Data(const char* ofil, double x, double y)
   {
   FILE* ofp;
@@ -1556,9 +1460,7 @@ void append2Data(const char* ofil, double x, double y)
   }
 
 /*==========================================================================*/
-/*
-File to write BS data collectively
-*/
+
 void appendAllData(const char* ofil, double x, double y, double z, double q, double w, double e, double r, double u, double j, double i, double o)
   {
   FILE* ofp;
@@ -1574,9 +1476,7 @@ void appendAllData(const char* ofil, double x, double y, double z, double q, dou
   }
 
 /*==========================================================================*/
-/*
-File to write the final diagnostics of the BS solution.
-*/
+
 void out_final_model(double x, double y, double z, double w, double a, double s, double r, const char* ofil)
   {
   FILE* ofp;
@@ -1594,9 +1494,6 @@ void out_final_model(double x, double y, double z, double w, double a, double s,
   }
 
 /*==========================================================================*/
-/*
-Simple file to write array data from BS calculation.
-*/
 void out_joint(double* x, double* xx, double* y, double* q, double* w, double* a, double* s, double* e, double* r, int n1, int n2, const char* ofil)
   {
   int i;
@@ -1616,9 +1513,7 @@ void out_joint(double* x, double* xx, double* y, double* q, double* w, double* a
   }
 
 /*==========================================================================*/
-/*
-Function to find the maximum value in the array
-*/
+
 double findMax(double* f, int n1, int n2)
   {
   int    i;
@@ -1633,9 +1528,7 @@ double findMax(double* f, int n1, int n2)
   }
 
 /*==========================================================================*/
-/*
-Check whether gravitational scalar field crosses -\alpha_0/beta_0 line.
-*/
+
 void check_phigrav(double entry)
 {
   double ratio = - par.alpha0/par.beta0;
@@ -1648,9 +1541,25 @@ void check_phigrav(double entry)
 }
 
 /*==========================================================================*/
-/*
-Do we have any NaNs.
-*/
+void out_old_solution(double x, const char* ofil)
+{
+double phigravmax;
+FILE* ofp;
+
+ofp = fopen(ofil, "w");
+  if(ofp == NULL) { printf("Cannot open %s in out_old_solution\n\n", ofil); exit(0); }
+
+phigravmax = findMax(star.phigrav, 0, par.nint-1);
+
+if (phigravmax > 0.1)
+{
+  fprintf(ofp, "%22.16g", x);
+  fclose(ofp);
+}
+
+}
+
+/*==========================================================================*/
 
 int nancheck(double y1, double y2, double y3, double y4)
   {
